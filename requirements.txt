@@ -1,0 +1,17 @@
+# Handsfree Core Dependencies
+mediapipe>=0.10.0
+opencv-python>=4.8.0
+vgamepad>=0.3.3; platform_system == "Windows"
+pydirectinput>=1.0.4; platform_system == "Windows"
+keyboard>=0.13.5
+pyaudio>=0.2.13
+vosk>=0.3.45
+
+# Dashboard & Telemetry
+fastapi>=0.100.0
+uvicorn>=0.23.0
+websockets>=11.0
+
+# Testing & Dev
+pytest>=7.0.0
+

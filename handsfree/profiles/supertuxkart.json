@@ -1,0 +1,64 @@
+{
+  "name": "SuperTuxKart Profile",
+  "description": "Optimized hands-free racing controls for SuperTuxKart",
+  "mappings": {
+    "base": {
+      "stick_x": {
+        "device": "gamepad",
+        "type": "axis",
+        "target": "X",
+        "scale": 1.0
+      },
+      "jawOpen": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "A",
+        "scale": 1.0,
+        "action_note": "Accelerate"
+      },
+      "browInnerUp": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "B",
+        "scale": 1.0,
+        "action_note": "Brake / Reverse"
+      },
+      "pop": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "X",
+        "scale": 1.0,
+        "action_note": "Fire / Use Item"
+      },
+      "mouthPucker": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "Y",
+        "scale": 1.0,
+        "action_note": "Nitro Boost"
+      },
+      "eyeBlinkLeft": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "LEFT_SHOULDER",
+        "scale": 1.0,
+        "action_note": "Look Back"
+      },
+      "eyeBlinkRight": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "RIGHT_SHOULDER",
+        "scale": 1.0,
+        "action_note": "Rescue Kart"
+      },
+      "escape": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "START",
+        "scale": 1.0,
+        "action_note": "Pause Game"
+      }
+    }
+  }
+}
+

@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Handsfree Live HUD</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --accent: #38bdf8;
+      --success: #22c55e;
+      --warning: #f59e0b;
+      --danger: #ef4444;
+      --text: #f8fafc;
+      --muted: #94a3b8;
+      --border: #334155;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      padding: 1.5rem;
+    }
+
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 1.5rem;
+      padding-bottom: 1rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.5rem;
+      padding: 0.35rem 0.75rem;
+      border-radius: 9999px;
+      font-size: 0.875rem;
+      background: #334155;
+    }
+
+    .dot {
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--danger);
+    }
+    .dot.connected { background: var(--success); }
+
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+      gap: 1.5rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 1.25rem;
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+    }
+
+    .card h2 {
+      font-size: 1.1rem;
+      color: var(--muted);
+      margin-bottom: 1rem;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .stick-container {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    canvas#stickCanvas {
+      background: #0f172a;
+      border-radius: 50%;
+      border: 2px solid var(--border);
+    }
+
+    .meter-group {
+      display: flex;
+      flex-direction: column;
+      gap: 0.75rem;
+    }
+
+    .meter-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 1rem;
+    }
+
+    .meter-label {
+      width: 110px;
+      font-size: 0.9rem;
+      color: var(--muted);
+    }
+
+    .meter-bar {
+      flex: 1;
+      height: 10px;
+      background: #0f172a;
+      border-radius: 5px;
+      overflow: hidden;
+    }
+
+    .meter-fill {
+      height: 100%;
+      width: 0%;
+      background: var(--accent);
+      transition: width 0.05s linear;
+    }
+
+    .meter-value {
+      width: 50px;
+      text-align: right;
+      font-family: monospace;
+      font-size: 0.9rem;
+    }
+
+    .pill-container {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      min-height: 48px;
+    }
+
+    .pill {
+      padding: 0.4rem 0.8rem;
+      border-radius: 8px;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--muted);
+      transition: all 0.1s ease;
+    }
+
+    .pill.active {
+      background: var(--accent);
+      color: #0f172a;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+    }
+
+    .indicator-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1rem;
+      margin-top: 1rem;
+    }
+
+    .indicator-box {
+      background: #0f172a;
+      border: 1px solid var(--border);
+      padding: 0.75rem;
+      border-radius: 8px;
+      text-align: center;
+    }
+
+    .indicator-box.active {
+      border-color: var(--warning);
+      color: var(--warning);
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Handsfree Telemetry HUD</h1>
+    <div class="status-badge">
+      <div id="statusDot" class="dot"></div>
+      <span id="statusText">Disconnected</span>
+    </div>
+  </header>
+
+  <main class="grid">
+    <div class="card stick-container">
+      <h2>Analog Stick Vector</h2>
+      <canvas id="stickCanvas" width="220" height="220"></canvas>
+      <div class="meter-value" id="stickCoords" style="width: auto;">X: 0.00 | Y: 0.00</div>
+    </div>
+
+    <div class="card">
+      <h2>Head Pose Orientation</h2>
+      <div class="meter-group">
+        <div class="meter-row">
+          <span class="meter-label">Yaw (Steer)</span>
+          <div class="meter-bar"><div id="yawBar" class="meter-fill"></div></div>
+          <span class="meter-value" id="yawVal">0.0°</span>
+        </div>
+        <div class="meter-row">
+          <span class="meter-label">Pitch (Aim)</span>
+          <div class="meter-bar"><div id="pitchBar" class="meter-fill"></div></div>
+          <span class="meter-value" id="pitchVal">0.0°</span>
+        </div>
+        <div class="meter-row">
+          <span class="meter-label">Roll (Tilt)</span>
+          <div class="meter-bar"><div id="rollBar" class="meter-fill"></div></div>
+          <span class="meter-value" id="rollVal">0.0°</span>
+        </div>
+      </div>
+
+      <div class="indicator-grid">
+        <div class="indicator-box" id="popIndicator">Mouth Pop</div>
+        <div class="indicator-box" id="speechIndicator">Speech Active</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Blendshape Activation</h2>
+      <div class="meter-group" id="blendshapeList"></div>
+    </div>
+
+    <div class="card">
+      <h2>Active Output Buttons</h2>
+      <div class="pill-container" id="buttonList">
+        <span class="pill" data-key="A">A</span>
+        <span class="pill" data-key="B">B</span>
+        <span class="pill" data-key="X">X</span>
+        <span class="pill" data-key="Y">Y</span>
+        <span class="pill" data-key="LB">LB</span>
+        <span class="pill" data-key="RB">RB</span>
+        <span class="pill" data-key="START">START</span>
+      </div>
+      <div style="margin-top: 1.5rem;">
+        <span style="color: var(--muted); font-size: 0.85rem;">System State: </span>
+        <strong id="systemState">ACTIVE</strong>
+      </div>
+    </div>
+  </main>
+
+  <script>
+    const canvas = document.getElementById('stickCanvas');
+    const ctx = canvas.getContext('2d');
+    const statusDot = document.getElementById('statusDot');
+    const statusText = document.getElementById('statusText');
+    const stickCoords = document.getElementById('stickCoords');
+    const yawBar = document.getElementById('yawBar');
+    const pitchBar = document.getElementById('pitchBar');
+    const rollBar = document.getElementById('rollBar');
+    const yawVal = document.getElementById('yawVal');
+    const pitchVal = document.getElementById('pitchVal');
+    const rollVal = document.getElementById('rollVal');
+    const popInd = document.getElementById('popIndicator');
+    const speechInd = document.getElementById('speechIndicator');
+    const blendshapeList = document.getElementById('blendshapeList');
+    const systemState = document.getElementById('systemState');
+
+    function drawStick(x, y) {
+      const cx = canvas.width / 2;
+      const cy = canvas.height / 2;
+      const r = cx - 15;
+
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.strokeStyle = '#1e293b';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r * 0.15, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.strokeStyle = '#334155';
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const px = cx + x * r;
+      const py = cy + y * r;
+
+      ctx.fillStyle = '#38bdf8';
+      ctx.beginPath();
+      ctx.arc(px, py, 14, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    drawStick(0, 0);
+
+    function connect() {
+      const ws = new WebSocket(`ws://${window.location.host}/ws`);
+
+      ws.onopen = () => {
+        statusDot.classList.add('connected');
+        statusText.textContent = 'Connected (Live)';
+      };
+
+      ws.onclose = () => {
+        statusDot.classList.remove('connected');
+        statusText.textContent = 'Disconnected (Reconnecting...)';
+        setTimeout(connect, 2000);
+      };
+
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+
+        if (data.stick) {
+          drawStick(data.stick.x, data.stick.y);
+          stickCoords.textContent = `X: ${data.stick.x.toFixed(2)} | Y: ${data.stick.y.toFixed(2)}`;
+        }
+
+        if (data.pose) {
+          yawVal.textContent = `${data.pose.yaw.toFixed(1)}°`;
+          pitchVal.textContent = `${data.pose.pitch.toFixed(1)}°`;
+          rollVal.textContent = `${data.pose.roll.toFixed(1)}°`;
+
+          yawBar.style.width = `${Math.min(100, Math.abs(data.pose.yaw) * 3)}%`;
+          pitchBar.style.width = `${Math.min(100, Math.abs(data.pose.pitch) * 3)}%`;
+          rollBar.style.width = `${Math.min(100, Math.abs(data.pose.roll) * 3)}%`;
+        }
+
+        if (data.audio) {
+          popInd.classList.toggle('active', !!data.audio.pop);
+          speechInd.classList.toggle('active', !!data.audio.speech);
+        }
+
+        if (data.state) {
+          systemState.textContent = data.state.toUpperCase();
+        }
+
+        if (data.pressed) {
+          document.querySelectorAll('.pill').forEach(pill => {
+            const k = pill.getAttribute('data-key');
+            pill.classList.toggle('active', data.pressed.includes(k));
+          });
+        }
+
+        if (data.blendshapes) {
+          blendshapeList.innerHTML = '';
+          for (const [k, v] of Object.entries(data.blendshapes)) {
+            const row = document.createElement('div');
+            row.className = 'meter-row';
+            row.innerHTML = `
+              <span class="meter-label">${k}</span>
+              <div class="meter-bar"><div class="meter-fill" style="width: ${Math.round(v * 100)}%"></div></div>
+              <span class="meter-value">${v.toFixed(2)}</span>
+            `;
+            blendshapeList.appendChild(row);
+          }
+        }
+      };
+    }
+
+    connect();
+  </script>
+</body>
+</html>
+

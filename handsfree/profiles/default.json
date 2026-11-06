@@ -1,0 +1,59 @@
+{
+  "name": "Default Virtual Gamepad Profile",
+  "description": "Standard hands-free mapping using head steering, jaw acceleration, and eye/audio triggers",
+  "mappings": {
+    "base": {
+      "stick_x": {
+        "device": "gamepad",
+        "type": "axis",
+        "target": "X",
+        "scale": 1.0
+      },
+      "stick_y": {
+        "device": "gamepad",
+        "type": "axis",
+        "target": "Y",
+        "scale": 1.0
+      },
+      "jawOpen": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "A",
+        "scale": 1.0
+      },
+      "browInnerUp": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "B",
+        "scale": 1.0
+      },
+      "pop": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "X",
+        "scale": 1.0
+      },
+      "mouthPucker": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "Y",
+        "scale": 1.0
+      },
+      "escape": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "START",
+        "scale": 1.0
+      }
+    },
+    "shift": {
+      "jawOpen": {
+        "device": "gamepad",
+        "type": "button",
+        "target": "RIGHT_SHOULDER",
+        "scale": 1.0
+      }
+    }
+  }
+}
+

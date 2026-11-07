@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "omnicontrol"
+version = "0.1.0"
+description = "OmniControl — Hands-free controller for games and desktop apps"
+readme = "README_INSTALL.md"
+requires-python = ">=3.11"
+authors = [
+    { name = "OmniControl Team" }
+]
+classifiers = [
+    "Programming Language :: Python :: 3.11",
+    "Operating System :: Microsoft :: Windows :: Windows 11",
+    "Topic :: Games/Entertainment",
+    "Topic :: Adaptive Technologies",
+]
+dependencies = []
+
+[project.optional-dependencies]
+tray = ["pystray", "pillow"]
+audio = ["sounddevice", "numpy", "vosk"]
+webcam = ["opencv-python", "mediapipe"]
+all = ["pystray", "pillow", "sounddevice", "numpy", "opencv-python"]
+
+[project.scripts]
+omnicontrol = "omnicontrol:main"
+
+[tool.setuptools]
+py-modules = [
+    "omnicontrol",
+    "main",
+    "state_machine",
+    "gateway",
+    "watchdog",
+    "elevation",
+    "doctor",
+    "config",
+    "single_instance",
+    "logsetup",
+    "version",
+    "tray",
+]
+packages = ["core", "adapters"]
+

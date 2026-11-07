@@ -1,0 +1,9 @@
+# Notepad demo for WINDOWS_CHECKLIST.md. Needs config.json:  "button_map": {"RT": ["key", "a"]}
+# Focus Notepad within 5 s of starting, then watch the letter 'a'.
+{"src": "webcam", "name": "face",     "value": 1.0, "t": 100.0}
+{"src": "webcam", "name": "jaw_open", "value": 0.9, "t": 106.0}
+{"src": "webcam", "name": "face",     "value": 0.0, "t": 107.2}
+{"src": "webcam", "name": "face",     "value": 1.0, "t": 108.0}
+{"src": "webcam", "name": "jaw_open", "value": 0.1, "t": 109.5}
+{"src": "webcam", "name": "jaw_open", "value": 0.9, "t": 110.1}
+{"src": "webcam", "name": "face",     "value": 1.0, "t": 114.0}

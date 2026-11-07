@@ -1,17 +1,25 @@
-# Handsfree Core Dependencies
-mediapipe>=0.10.0
+# Core Engine (standard library based)
+# System Tray (optional: without these the app runs without a tray icon)
+pystray>=0.19
+pillow>=10
+
+# Handsfree Vision & Audio Adapters (Antas & Dishti)
 opencv-python>=4.8.0
-vgamepad>=0.3.3; platform_system == "Windows"
-pydirectinput>=1.0.4; platform_system == "Windows"
-keyboard>=0.13.5
+mediapipe>=0.10.0
+numpy>=1.24.0
+sounddevice>=0.4.6
 pyaudio>=0.2.13
 vosk>=0.3.45
+keyboard>=0.13.5
 
-# Dashboard & Telemetry
+# Virtual Controller & Input Backends
+vgamepad>=0.3.3; platform_system == "Windows"
+pydirectinput>=1.0.4; platform_system == "Windows"
+
+# Telemetry Dashboard HUD (Shaury)
 fastapi>=0.100.0
 uvicorn>=0.23.0
 websockets>=11.0
 
-# Testing & Dev
+# Automated Testing & Dev
 pytest>=7.0.0
-

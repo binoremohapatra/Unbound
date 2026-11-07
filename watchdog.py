@@ -22,15 +22,35 @@ log = logging.getLogger("omnicontrol.watchdog")
 
 
 class Watchdog:
-    def __init__(self, check_ms: int = 20):
-        self._period = check_ms / 1000.0
-        self._timeout: dict[str, float] = {}
-        self._cb: dict[str, Callable[[str], None]] = {}
-        self._last: dict[str, float] = {}
-        self._tripped: set[str] = set()
-        self._lock = threading.Lock()
-        self._stop = threading.Event()
-        self._thread = threading.Thread(target=self._run, name="watchdog", daemon=True)
+    def __init__(
+        self,
+        channels_or_check_ms: int | float | dict[str, float] = 20,
+        on_trip: Optional[Callable[[str], None]] = None,
+        on_stale: Optional[Callable[[str, float], None]] = None,
+        check_ms: int = 20,
+    ):
+        if isinstance(channels_or_check_ms, dict):
+            self._period = check_ms / 1000.0
+            self._timeout: dict[str, float] = {}
+            self._cb: dict[str, Callable[[str], None]] = {}
+            self._stale_cb: Optional[Callable[[str, float], None]] = on_stale
+            self._last: dict[str, float] = {}
+            self._tripped: set[str] = set()
+            self._lock = threading.Lock()
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._run, name="watchdog", daemon=True)
+            for ch, tout in channels_or_check_ms.items():
+                self.add_channel(ch, int(tout * 1000), on_trip or (lambda n: None))
+        else:
+            self._period = float(channels_or_check_ms) / 1000.0
+            self._timeout = {}
+            self._cb = {}
+            self._stale_cb = on_stale
+            self._last = {}
+            self._tripped = set()
+            self._lock = threading.Lock()
+            self._stop = threading.Event()
+            self._thread = threading.Thread(target=self._run, name="watchdog", daemon=True)
 
     def add_channel(self, name: str, timeout_ms: int, on_trip: Callable[[str], None]) -> None:
         with self._lock:
@@ -62,6 +82,11 @@ class Watchdog:
                     fire.append((name, self._cb[name]))
         for name, cb in fire:
             log.error("watchdog: channel %r silent, tripping", name)
+            if self._stale_cb:
+                try:
+                    self._stale_cb(name, t)
+                except Exception:
+                    pass
             try:
                 cb(name)
             except Exception:

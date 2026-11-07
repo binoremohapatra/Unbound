@@ -103,34 +103,38 @@ class BasicMapper:
         return []
 
 
-class BasicAssist:
-    """Minimal stand-in until Antas's slowpath/assist is in.
+class DefaultProducer:
+    """Stand-in for Antas's pipeline: head angles -> stick, jaw_open -> timed hold."""
 
-    Jaw open = hold fire (primary trigger, capped at max_hold_ms by the state machine).
-    Brow up  = tap interact (e.g. reload or use).
-    Head roll = tilt-to-lean or look-stick.
-    """
-    def __init__(self, hold_name: str = "fire", action_name: str = "interact") -> None:
-        self.hold_name = hold_name
-        self.action_name = action_name
-        self._firing = False
+    def __init__(self, range_deg: float = 20.0, jaw_on: float = 0.55, jaw_off: float = 0.32,
+                 hold_ms: int = 1800):
+        self.range, self.on, self.off, self.hold_ms = range_deg, jaw_on, jaw_off, hold_ms
+        self._yaw = self._pitch = 0.0
+        self._jaw = False
 
     def process(self, events: list[SignalEvent], now: float) -> list[Intent]:
         out: list[Intent] = []
+        moved = False
         for e in events:
-            if e.src != "webcam":
-                continue
-            if e.name == "jaw_open":
-                open_ = e.value >= 0.5
-                if open_ and not self._firing:
-                    out.append(Intent("hold", self.hold_name, t=now))
-                    self._firing = True
-                elif not open_ and self._firing:
-                    out.append(Intent("release", self.hold_name, t=now))
-                    self._firing = False
-            elif e.name == "brow_up" and e.value >= 0.6:
-                out.append(Intent("action", self.action_name, t=now))
+            if e.name == "head_yaw":
+                self._yaw, moved = e.value, True
+            elif e.name == "head_pitch":
+                self._pitch, moved = e.value, True
+            elif e.name == "jaw_open":
+                if not self._jaw and e.value >= self.on:
+                    self._jaw = True
+                    out.append(Intent("hold", "fire", ms=self.hold_ms))
+                elif self._jaw and e.value <= self.off:
+                    self._jaw = False
+            elif e.name == "brow_raise" and e.value >= 0.58:
+                out.append(Intent("action", "interact"))
+        if moved:
+            c = lambda v: max(-1.0, min(1.0, v / self.range))
+            out.append(Intent("stick", "look", x=c(self._yaw), y=c(self._pitch)))
         return out
+
+
+BasicAssist = DefaultProducer
 
 
 # ------------------------------------------------------------------ engine
@@ -265,11 +269,17 @@ def _windows_realtime() -> None:
     import ctypes
     try:
         ctypes.windll.winmm.timeBeginPeriod(1)                       # 1 ms sleep granularity
+    except Exception:
+        pass
+    try:
         ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x80)
+    except Exception:
+        log.debug("could not set high priority class")
+    try:
         ctypes.windll.shell32.IsUserAnAdmin() or log.warning(
             "not running as admin: elevated games will ignore our input (UIPI)")
     except Exception:
-        log.exception("realtime setup failed")
+        pass
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -380,37 +390,36 @@ def _run(a: argparse.Namespace, cfg: AppConfig, watcher: Optional[ConfigWatcher]
         log.warning("using BasicAssist producer fallback")
         producers = [BasicAssist()]
 
-    replay: Optional[ReplaySource] = None
-    if a.replay:
-        replay = ReplaySource(a.replay, speed=a.speed)
-        sources = [replay]
-    else:
-        sources = _load_live_sources()
-        if not sources:
-            log.warning("no live sources; running with empty input")
+    engine = Engine(sm, mapper, gw, producers, latency, recorder, cfg)
 
-    stale: collections.deque[float] = collections.deque()
-    wd = Watchdog({"loop": 0.250, "webcam": 0.500},
-                  on_trip=lambda ch: gw.release_all(f"watchdog:{ch}"),
-                  on_stale=lambda ch, _: stale.append(clock.now()) if ch == "webcam" else None)
-    wd.start()
-
-    engine = Engine(sm, mapper, gw, producers, latency=latency, recorder=recorder, cfg=cfg)
-
-    # Launch Shaury's telemetry HUD if requested
-    dashboard_server = None
-    if a.dashboard:
-        try:
-            from handsfree.dashboard.server import DashboardServer
-            dashboard_server = DashboardServer(port=a.dashboard_port)
-            dashboard_server.start()
-            log.info("telemetry HUD dashboard active on http://127.0.0.1:%d", a.dashboard_port)
-        except Exception:
-            log.exception("failed to start telemetry dashboard")
-
-    ctl = TrayController()
+    replay = ReplaySource(a.replay, a.speed) if a.replay else None
+    sources = [replay] if replay else _load_live_sources()
+    wd = Watchdog()
+    fc: Optional[FrameClock] = None
+    ctl = TrayController(config_path(), log_dir())
     tray = None
     try:
+        if not sources:
+            log.error("no input sources available; nothing to do")
+            return 1
+
+        stale: collections.deque = collections.deque()
+        wd.add_channel("loop", 250, lambda n: gw.release_all("deadman: main loop stalled"))
+        wd.add_channel("webcam", 500, lambda n: stale.append(n))
+        wd.start()
+        wd.beat("loop")
+
+        # Launch Shaury's telemetry HUD if requested
+        dashboard_server = None
+        if a.dashboard:
+            try:
+                from handsfree.dashboard.server import DashboardServer
+                dashboard_server = DashboardServer(port=a.dashboard_port)
+                dashboard_server.start()
+                log.info("telemetry HUD dashboard active on http://127.0.0.1:%d", a.dashboard_port)
+            except Exception:
+                log.exception("failed to start telemetry dashboard")
+
         fg, kill, fc = ForegroundWatcher(), KillSwitch(), FrameClock(a.hz or cfg.hz)
         elev = elevation.ElevationMonitor()
         log.info("administrator: %s", "yes" if elev.self_admin else "no")

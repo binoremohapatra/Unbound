@@ -130,10 +130,16 @@ def _spawn_doctor() -> None:
 class TrayController:
     """Everything a menu click may do. Safe to call from the tray thread."""
 
-    def __init__(self, config_file: Path, logs: Path,
+    def __init__(self, config_file: Optional[Path] = None, logs: Optional[Path] = None,
                  open_path: Callable[[Path], None] = _open_path,
                  run_doctor: Callable[[], None] = _spawn_doctor,
                  now: Callable[[], float] = clock.now) -> None:
+        if config_file is None:
+            from config import config_path
+            config_file = config_path()
+        if logs is None:
+            from config import log_dir
+            logs = log_dir()
         self.config_file, self.logs = config_file, logs
         self._open, self._doctor, self._now = open_path, run_doctor, now
         self.events: queue.SimpleQueue = queue.SimpleQueue()

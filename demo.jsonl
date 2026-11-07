@@ -1,0 +1,8 @@
+{"src": "webcam", "name": "face", "value": 1.0, "t": 0.00, "conf": 1.0}
+{"src": "webcam", "name": "head_yaw", "value": 15.0, "t": 0.10, "conf": 1.0}
+{"src": "webcam", "name": "jaw_open", "value": 0.9, "t": 0.20, "conf": 1.0}
+{"src": "mic", "name": "pop", "value": 1.0, "t": 0.60, "conf": 1.0}
+{"src": "webcam", "name": "jaw_open", "value": 0.1, "t": 0.70, "conf": 1.0}
+{"src": "webcam", "name": "jaw_open", "value": 0.9, "t": 0.90, "conf": 1.0}
+{"src": "webcam", "name": "face", "value": 0.0, "t": 1.50, "conf": 1.0}
+

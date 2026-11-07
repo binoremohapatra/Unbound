@@ -16,6 +16,12 @@ Usage:
   python main.py --dry-run                       live sources, no real input injected
   python main.py --replay session.jsonl --dry-run --speed 4
   python main.py --record session.jsonl          live + save every event
+  python main.py --doctor [--json] [--quick]     check camera, mic, privacy, SendInput, jitter, deps
+  python main.py --elevate                       restart as administrator (UAC) for elevated games
+  python main.py --safe                          built-in defaults only: no config file, no profile
+  python main.py --no-tray                       do not show the system-tray icon
+
+Settings live in %APPDATA%\\OmniControl\\config.json and hot-reload (see config.py).
 """
 from __future__ import annotations
 
@@ -25,23 +31,33 @@ import importlib
 import logging
 import os
 import sys
-from typing import Optional
+from dataclasses import replace
+from typing import Callable, Optional
 
+import elevation
+import logsetup
 from adapters.replay import Recorder, ReplaySource
-from config import ConfigWatcher, appdata_dir, load_config
+from config import AppConfig, ConfigWatcher, config_path, effective_axis_map, log_dir
 from core import clock
 from core.events import Intent, OutputCommand, SignalEvent
-from doctor import doctor_main
-from elevation import check_foreground_elevation, ensure_admin, is_admin
-from gateway import (ForegroundWatcher, Gateway, KillSwitch, RecordingBackend,
-                     SendInputBackend)
-from logging_setup import install_crash_handler, setup_logging
-from session_guard import SessionLockWindow, SingleInstanceGuard
+from gateway import (
+    ForegroundWatcher,
+    Gateway,
+    KillSwitch,
+    RecordingBackend,
+    SendInputBackend,
+)
+from single_instance import APP_INSTANCE_NAME, SingleInstance
 from state_machine import SMConfig, StateMachine
-from tray import TrayIcon, open_logs_folder
+from tray import TrayController, create_tray
+from version import __version__
 from watchdog import FrameClock, LatencyLog, Watchdog
 
 log = logging.getLogger("omnicontrol.main")
+
+# --safe: shorter holds, longer face-regain dwell. Nothing from disk can change these.
+SAFE_CONFIG = AppConfig(default_hold_ms=1200, max_hold_ms=3000, face_regain_ms=500)
+SINGLE_INSTANCE_NAME = APP_INSTANCE_NAME     # tests override this
 
 
 # ------------------------------------------------------------------ fallbacks
@@ -117,17 +133,20 @@ class DefaultProducer:
         return out
 
 
+
 # ------------------------------------------------------------------ engine
 class Engine:
     def __init__(self, sm: StateMachine, mapper, gateway: Gateway, producers: list,
                  latency: Optional[LatencyLog] = None, recorder: Optional[Recorder] = None,
-                 deny_list: Optional[list[str]] = None):
+                 cfg: Optional[AppConfig] = None):
         self.sm, self.mapper, self.gw = sm, mapper, gateway
         self.producers = producers
         self.latency = latency or LatencyLog()
         self.recorder = recorder
-        self.deny_list = [d.lower() for d in (deny_list or [])]
+        self.cfg = cfg or AppConfig()
         self.last_commands: list[OutputCommand] = []
+        self.input_blocked = False        # foreground app is elevated and we are not (UIPI)
+        self.foreground = ""
 
     def step(self, events: list[SignalEvent], now: float,
              context: Optional[str] = None) -> list[OutputCommand]:
@@ -142,14 +161,7 @@ class Engine:
             if not consumed:
                 pending.append(ev)
         if context is not None:
-            ctx_lower = context.lower()
-            # If foreground process is in deny-list, force CONVERSE_LOCK and cancel all
-            if self.deny_list and any(ctx_lower == d or ctx_lower.endswith(d) for d in self.deny_list):
-                log.warning("Foreground app %r is in deny-list: locking input", context)
-                out, _ = self.sm.on_event(SignalEvent("switch", "kill", 1.0, now), now)
-                direct.extend(out)
-            else:
-                direct.extend(self.sm.on_context_change(context, now))
+            direct.extend(self.sm.on_context_change(context, now))
 
         proposed: list[Intent] = []
         for p in self.producers:
@@ -175,23 +187,64 @@ class Engine:
         self.last_commands = cmds
         return cmds
 
+    def apply_config(self, cfg: AppConfig, now: float,
+                     mapper_factory: Optional[Callable[[str], object]] = None) -> None:
+        """Apply a hot-reloaded config. If key bindings or the profile change, everything is
+        cancelled through the normal path FIRST (state machine, mapper and gateway all agree
+        nothing is held); timing and log-level changes never disturb a hold in progress."""
+        old = self.cfg
+        rebind = (cfg.profile, cfg.button_map, cfg.axis_tuning) != (
+            old.profile, old.button_map, old.axis_tuning)
+        if rebind:
+            cmds: list[OutputCommand] = []
+            for it in self.sm.gate([Intent("cancel_all")], now):
+                cmds.extend(self.mapper.handle(it, now))
+            self.gw.apply(cmds)
+            self.gw.release_all("config change")          # belt and braces: any mapper
+        sm_cfg = self.sm.cfg
+        sm_cfg.default_hold_ms, sm_cfg.max_hold_ms = cfg.default_hold_ms, cfg.max_hold_ms
+        sm_cfg.face_regain_ms = cfg.face_regain_ms
+        if rebind:
+            self.gw.update_maps(button_map=dict(cfg.button_map),
+                                axis_map=effective_axis_map(cfg))
+            if cfg.profile != old.profile and mapper_factory is not None:
+                new_mapper = mapper_factory(cfg.profile)
+                if new_mapper is None:
+                    log.error("profile %r failed to load; keeping the current mapping", cfg.profile)
+                else:
+                    self.mapper = new_mapper
+        logsetup.set_level(cfg.log_level)
+        self.cfg = cfg
+
     def status(self) -> dict:
         """Read-only dict for Shaury's dashboard: state, latency, FPS, held keys."""
         s = self.sm.snapshot(clock.now())
         return {"state": s.state.value, "reason": s.reason, "latched": s.latched,
                 "remaining_ms": s.remaining_ms, "face_ok": s.face_ok, "locked": s.locked,
-                "held": sorted(self.gw.held), "dropped": self.sm.dropped, **self.latency.summary()}
+                "held": sorted(self.gw.held), "dropped": self.sm.dropped,
+                "input_blocked": self.input_blocked, "foreground": self.foreground,
+                **self.latency.summary()}
 
 
 # ------------------------------------------------------------------ assembly
-def _load_mapper(profile: str):
+def _try_load_mapper(profile: str):
+    """Dishti's Mapper for `profile`, or None if it is missing or fails."""
     try:
         mod = importlib.import_module("mapping")
         return mod.Mapper(profile)
     except ModuleNotFoundError:
-        log.warning("mapping.py not found: using BasicMapper fallback")
+        log.warning("mapping.py not found")
     except Exception:
-        log.exception("mapping.Mapper(%r) failed: using BasicMapper fallback", profile)
+        log.exception("mapping.Mapper(%r) failed", profile)
+    return None
+
+
+def _load_mapper(profile: str):
+    return _try_load_mapper(profile) or _fallback_mapper()
+
+
+def _fallback_mapper():
+    log.warning("using BasicMapper fallback")
     return BasicMapper()
 
 
@@ -212,17 +265,6 @@ def _windows_realtime() -> None:
         return
     import ctypes
     try:
-        # DPI awareness: per-monitor v2
-        try:
-            u32 = ctypes.windll.user32
-            u32.SetProcessDpiAwarenessContext.argtypes = [ctypes.c_void_p]
-            u32.SetProcessDpiAwarenessContext(ctypes.c_void_p(-4))
-        except Exception:
-            try:
-                ctypes.windll.shcore.SetProcessDpiAwareness(2)
-            except Exception:
-                pass
-
         ctypes.windll.winmm.timeBeginPeriod(1)                       # 1 ms sleep granularity
         ctypes.windll.kernel32.SetPriorityClass(ctypes.windll.kernel32.GetCurrentProcess(), 0x80)
         ctypes.windll.shell32.IsUserAnAdmin() or log.warning(
@@ -231,134 +273,131 @@ def _windows_realtime() -> None:
         log.exception("realtime setup failed")
 
 
-def main(argv: Optional[list[str]] = None) -> int:
+def build_parser() -> argparse.ArgumentParser:
     ap = argparse.ArgumentParser(description="OmniControl engine")
-    ap.add_argument("--doctor", action="store_true", help="run hardware & permission diagnostics")
-    ap.add_argument("--replay", help="replay recorded session JSONL")
-    ap.add_argument("--record", help="record live session to JSONL")
+    ap.add_argument("--version", action="version", version=f"OmniControl {__version__}")
+    ap.add_argument("--replay"), ap.add_argument("--record")
     ap.add_argument("--speed", type=float, default=1.0)
     ap.add_argument("--dry-run", action="store_true", help="do not inject real input")
-    ap.add_argument("--safe", action="store_true", help="safe mode: dry-run, no real input")
-    ap.add_argument("--elevate", action=argparse.BooleanOptionalAction, default=None,
-                    help="request UAC admin elevation if not running as admin")
-    ap.add_argument("--hz", type=float, default=None)
-    ap.add_argument("--profile", default=None)
-    ap.add_argument("--config", default=None, help="path to config.json")
+    ap.add_argument("--hz", type=float, default=None, help="loop rate (default: config, 60)")
+    ap.add_argument("--profile", default=None, help="pin a profile (overrides config.json)")
     ap.add_argument("--latency-log")
     ap.add_argument("--duration", type=float, default=0.0, help="stop after N seconds (0 = run)")
     ap.add_argument("-v", "--verbose", action="store_true")
-    a = ap.parse_args(argv)
+    ap.add_argument("--doctor", action="store_true", help="check this machine and exit")
+    ap.add_argument("--json", action="store_true", help="(with --doctor) JSON output")
+    ap.add_argument("--quick", action="store_true",
+                    help="(with --doctor) skip the camera, microphone and jitter tests")
+    ap.add_argument("--safe", action="store_true",
+                    help="built-in defaults only: ignore config.json and profiles, shorter holds")
+    ap.add_argument("--elevate", action="store_true", help="restart as administrator (UAC prompt)")
+    ap.add_argument("--elevated", action="store_true", help=argparse.SUPPRESS)  # set by the relaunch
+    ap.add_argument("--no-tray", action="store_true", help="no system-tray icon")
+    ap.add_argument("--tray", action="store_true",
+                    help="with --replay: show the tray icon, take the single-instance lock and keep "
+                         "running until Quit (demos and testing without a camera)")
+    ap.add_argument("--allow-multiple", action="store_true",
+                    help="skip the single-instance check (development)")
+    return ap
 
-    if a.doctor:
-        return doctor_main()
 
-    # Load configuration
-    cfg_path = None
-    if a.config:
-        from pathlib import Path
-        cfg_path = Path(a.config)
-    cfg = load_config(cfg_path)
+def _pin(cfg: AppConfig, a: argparse.Namespace) -> AppConfig:
+    """Command-line choices beat the config file, including after a hot reload."""
+    if a.profile:
+        cfg = replace(cfg, profile=a.profile)
+    if a.verbose:
+        cfg = replace(cfg, log_level="DEBUG")
+    return cfg
 
-    # Elevation check / re-launch
-    should_elevate = a.elevate if a.elevate is not None else cfg.elevate
-    if should_elevate and not a.replay and not a.dry_run and not a.safe:
-        if ensure_admin(force=True):
-            return 0  # Re-launched elevated process; parent exits cleanly
 
-    # Setup logging (5 x 1MB rotating + console)
-    log_level = "DEBUG" if a.verbose else cfg.log_level
-    setup_logging(level_name=log_level, console=True)
+def _tray_wanted(a: argparse.Namespace) -> bool:
+    """The tray is for real Windows sessions: not for plain replays, tests or --no-tray."""
+    return os.name == "nt" and not a.no_tray and (a.tray or not a.replay)
 
-    # Single-instance guard (skip for replay/dry-run/short duration tests)
-    mutex_guard = None
-    if not a.replay and not a.dry_run and not a.safe and a.duration == 0.0:
-        mutex_guard = SingleInstanceGuard()
-        if not mutex_guard.acquire():
-            log.error("OmniControl is already running. Exiting.")
-            return 1
 
-    live = os.name == "nt" and not (a.dry_run or a.safe or cfg.safe_mode)
+def _needs_lock(a: argparse.Namespace) -> bool:
+    """Plain replays and --allow-multiple skip the single-instance lock; everything else takes it."""
+    return (not a.replay or a.tray) and not a.allow_multiple
+
+
+def _elevate_from_tray(instance: SingleInstance, raw_args: list[str]) -> bool:
+    """True = an administrator copy was started and this one should exit.
+
+    The lock is dropped BEFORE asking, so the new copy can take it. If the user declines UAC we
+    take the lock back and carry on."""
+    held = instance.owned
+    instance.release()
+    if elevation.relaunch_as_admin(raw_args):
+        return True
+    if held:
+        instance.acquire()
+    log.warning("administrator rights not granted; staying as a normal user")
+    return False
+
+
+class _Releaser:
+    """Crash handlers are installed before the gateway exists, so release is late-bound."""
+
+    def __init__(self) -> None:
+        self.gw: Optional[Gateway] = None
+
+    def __call__(self, why: str) -> None:
+        if self.gw is not None:
+            self.gw.release_all(why)
+
+
+def _run(a: argparse.Namespace, cfg: AppConfig, watcher: Optional[ConfigWatcher],
+         releaser: _Releaser, instance: SingleInstance, raw_args: list[str]) -> int:
+    live = os.name == "nt" and not a.dry_run
     backend = SendInputBackend() if live else RecordingBackend()
     if not live:
-        log.info("safe / dry-run backend: no real input will be sent")
-
-    loop_hz = a.hz if a.hz is not None else cfg.hz
-    profile_name = a.profile if a.profile is not None else cfg.profile
-
-    gw = Gateway(
-        backend,
-        max_transitions_per_s=cfg.max_key_transitions_per_second,
-        on_rate_limit=lambda: log.warning("Rate limit tripped; input stopped"),
-    )
+        log.info("dry-run backend: no real input will be sent")
+    gw = Gateway(backend, button_map=dict(cfg.button_map), axis_map=effective_axis_map(cfg))
+    releaser.gw = gw
     gw.install_exit_handlers()
-    install_crash_handler(on_release=lambda r: gw.release_all(f"crash: {r}"))
     _windows_realtime()
 
-    sm = StateMachine(SMConfig())
+    sm = StateMachine(SMConfig(default_hold_ms=cfg.default_hold_ms, max_hold_ms=cfg.max_hold_ms,
+                               face_regain_ms=cfg.face_regain_ms))
     sm.subscribe(lambda s: log.info("STATE %s (%s) latched=%s", s.state.value, s.reason, s.latched))
     latency = LatencyLog(jsonl_path=a.latency_log)
     recorder = Recorder(a.record) if a.record else None
-    engine = Engine(sm, _load_mapper(profile_name), gw, [DefaultProducer()], latency, recorder,
-                    deny_list=cfg.deny_list)
-
-    # Config hot-reload watcher
-    def _on_cfg_change(new_cfg):
-        gw.max_transitions_per_s = new_cfg.max_key_transitions_per_second
-        engine.deny_list = [d.lower() for d in new_cfg.deny_list]
-        log.info("Applied live config updates (deny_list=%d items, max_tps=%d)",
-                 len(engine.deny_list), gw.max_transitions_per_s)
-
-    cfg_watcher = ConfigWatcher(path=cfg_path, poll_s=2.0, on_change=_on_cfg_change)
-    cfg_watcher.start()
-
-    # Session lock handler (workstation lock / sleep)
-    def _on_session_lock():
-        gw.release_all("session_lock")
-        sm.on_event(SignalEvent("switch", "kill", 1.0, clock.now()), clock.now())
-
-    session_wnd = SessionLockWindow(on_lock=_on_session_lock)
-    session_wnd.start()
-
-    # System tray icon
-    tray = None
-    tray_pause_flag = collections.deque()
-    if cfg.tray_enabled and not a.dry_run and not a.safe and not a.replay and a.duration == 0.0:
-        tray = TrayIcon(
-            on_panic=lambda: gw.release_all("tray_panic"),
-            on_toggle_pause=lambda: tray_pause_flag.append(True),
-            on_run_doctor=doctor_main,
-            on_open_logs=open_logs_folder,
-            on_quit=lambda: None,
-        )
-        sm.subscribe(lambda s: tray.set_state(s.state.value))
-        tray.start()
+    mapper = _fallback_mapper() if a.safe else _load_mapper(cfg.profile)
+    engine = Engine(sm, mapper, gw, [DefaultProducer()], latency, recorder, cfg)
 
     replay = ReplaySource(a.replay, a.speed) if a.replay else None
     sources = [replay] if replay else _load_live_sources()
-    if not sources:
-        log.error("no input sources available; nothing to do")
-        cfg_watcher.stop()
-        session_wnd.stop()
-        if mutex_guard:
-            mutex_guard.release()
-        return 1
-
-    stale: collections.deque = collections.deque()
     wd = Watchdog()
-    wd.add_channel("loop", 250, lambda n: gw.release_all("deadman: main loop stalled"))
-    wd.add_channel("webcam", 500, lambda n: stale.append(n))
-    wd.start()
-    wd.beat("loop")
-
-    fg = ForegroundWatcher()
-    kill = KillSwitch(vk=cfg.panic_vk, chord_enabled=cfg.panic_chord)
-    fc = FrameClock(loop_hz)
-    t_end = clock.now() + a.duration if a.duration else None
-    next_uipi_check = 0.0
-
+    fc: Optional[FrameClock] = None
+    ctl = TrayController(config_path(), log_dir())
+    tray = None
     try:
+        if not sources:
+            log.error("no input sources available; nothing to do")
+            return 1
+
+        stale: collections.deque = collections.deque()
+        wd.add_channel("loop", 250, lambda n: gw.release_all("deadman: main loop stalled"))
+        wd.add_channel("webcam", 500, lambda n: stale.append(n))   # armed on first webcam event
+        wd.start()
+        wd.beat("loop")
+
+        fg, kill, fc = ForegroundWatcher(), KillSwitch(), FrameClock(a.hz or cfg.hz)
+        elev = elevation.ElevationMonitor()
+        log.info("administrator: %s", "yes" if elev.self_admin else "no")
+        if _tray_wanted(a):
+            tray = create_tray(ctl, elev.self_admin)
+            if tray is not None:
+                tray.start()
+        next_tray = 0.0
+        t_end = clock.now() + a.duration if a.duration else None
         while True:
             now = fc.wait()
+            if watcher is not None:
+                new_cfg = watcher.poll(now)
+                if new_cfg is not None:
+                    engine.apply_config(_pin(new_cfg, a), now, _try_load_mapper)
+                    log.info("config reloaded from %s", watcher.path)
             events: list[SignalEvent] = []
             for s in sources:
                 try:
@@ -369,30 +408,37 @@ def main(argv: Optional[list[str]] = None) -> int:
                 wd.beat("webcam")
             if kill.pressed_edge():
                 events.append(SignalEvent("switch", "kill", 1.0, now))
-            while tray_pause_flag:
-                tray_pause_flag.popleft()
-                if sm.locked:
-                    events.append(SignalEvent("mic", "voice_resume", 1.0, now))
-                else:
-                    events.append(SignalEvent("switch", "kill", 1.0, now))
+            events.extend(ctl.drain())                    # Freeze / Resume clicked in the tray
             while stale:
                 stale.popleft()
-                events.append(SignalEvent("webcam", "face", 0.0, now))
-
-            # UIPI elevation check (throttled ~1 Hz)
-            if now >= next_uipi_check:
-                next_uipi_check = now + 1.0
-                check_foreground_elevation()
-
-            engine.step(events, now, context=fg.poll(now) or None)
+                events.append(SignalEvent("webcam", "face", 0.0, now))   # camera went silent
+            context = fg.poll(now) or None
+            info = elev.update(fg.pid)
+            if info is not None:
+                engine.foreground, engine.input_blocked = context or "", info.blocked
+                if info.blocked:
+                    log.warning("foreground app %s is elevated and we are not: Windows will drop "
+                                "our input (UIPI). Restart as administrator (--elevate).", context)
+            engine.step(events, now, context=context)
             wd.beat("loop")
-            if (replay and replay.finished and not engine.sm._latches) or (t_end and now >= t_end):
+            if tray is not None and now >= next_tray:
+                tray.update(engine.status())
+                next_tray = now + 0.25
+            if ctl.quit_requested.is_set():
+                log.info("quit requested from the tray")
                 break
+            if ctl.elevate_requested.is_set():
+                ctl.elevate_requested.clear()
+                if _elevate_from_tray(instance, raw_args):
+                    break
+            replay_done = replay and replay.finished and not engine.sm._latches
+            keep_open = a.tray and tray is not None          # demo mode: run until Quit
+            if (replay_done and not keep_open) or (t_end and now >= t_end):
+                break
+        return 0
     finally:
         wd.stop()
-        cfg_watcher.stop()
-        session_wnd.stop()
-        if tray:
+        if tray is not None:
             tray.stop()
         gw.release_all("shutdown")
         for s in sources:
@@ -403,10 +449,56 @@ def main(argv: Optional[list[str]] = None) -> int:
         if recorder:
             recorder.close()
         latency.close()
-        if mutex_guard:
-            mutex_guard.release()
-        log.info("summary: %s overruns=%d", latency.summary(), fc.overruns)
-    return 0
+        log.info("summary: %s overruns=%d", latency.summary(), fc.overruns if fc else 0)
+
+
+def main(argv: Optional[list[str]] = None) -> int:
+    raw_args = sys.argv[1:] if argv is None else list(argv)
+    a = build_parser().parse_args(raw_args)
+
+    if a.doctor:
+        import doctor
+        return doctor.run_cli(as_json=a.json, slow=not a.quick)
+
+    watcher: Optional[ConfigWatcher] = None
+    if a.safe:
+        cfg = SAFE_CONFIG
+    else:
+        watcher = ConfigWatcher(config_path())
+        cfg = watcher.load()
+    cfg = _pin(cfg, a)
+
+    ring = logsetup.setup_logging(log_dir(), cfg.log_level)
+    log.info("OmniControl %s starting%s", __version__, " (safe mode)" if a.safe else "")
+    if a.safe:
+        log.warning("SAFE MODE: config.json and profiles ignored; holds capped at %d ms",
+                    cfg.max_hold_ms)
+
+    # --elevate: relaunch BEFORE claiming the single-instance lock, so the new copy can take it.
+    if a.elevate and not a.elevated and not elevation.is_admin():
+        if elevation.relaunch_as_admin(raw_args):
+            log.info("administrator copy started; this copy exits")
+            logsetup.teardown_logging()
+            return 0
+        log.warning("administrator rights not granted; continuing without them")
+
+    releaser = _Releaser()
+    uninstall_crash = logsetup.install_crash_handlers(releaser, log_dir(), ring)
+    instance = SingleInstance(SINGLE_INSTANCE_NAME)
+    try:
+        if _needs_lock(a) and not instance.acquire():
+            msg = ("OmniControl is already running (look for its tray icon). "
+                   "Quit that copy first, then start this one.")
+            log.error(msg)
+            if getattr(sys, "frozen", False):          # a windowed exe has no console to read
+                import doctor
+                doctor.show_message_box("OmniControl", msg)
+            return 2
+        return _run(a, cfg, watcher, releaser, instance, raw_args)
+    finally:
+        instance.release()
+        uninstall_crash()
+        logsetup.teardown_logging()
 
 
 if __name__ == "__main__":

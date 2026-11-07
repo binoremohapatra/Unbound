@@ -1,64 +1,53 @@
-; ==============================================================================
-; Inno Setup Script for OmniControl
-; Installs to {autopf}\OmniControl
-; Creates Start Menu shortcuts
-; Optional HKCU Run key for autostart (OFF by default)
-; Full clean uninstall
-; ==============================================================================
-
-#define MyAppName "OmniControl"
-#define MyAppVersion "0.1.0"
-#define MyAppPublisher "OmniControl Team"
-#define MyAppURL "https://github.com/omnicontrol"
-#define MyAppExeName "OmniControl.exe"
+; OmniControl installer. Build the app first (pyinstaller omnicontrol.spec), then:
+;     iscc /DAppVersion=0.1.0 installer.iss          (Inno Setup 6.3 or newer)
+; build.ps1 does both. The installer is per-user by default (no admin needed); the "for all users"
+; choice in the first dialog installs to Program Files and does ask for admin.
+#define AppName "OmniControl"
+#ifndef AppVersion
+  #define AppVersion "0.1.0"
+#endif
 
 [Setup]
-AppId={{D37F8E42-9A31-4F29-BA70-6E35C8E8B490}
-AppName={#MyAppName}
-AppVersion={#MyAppVersion}
-AppPublisher={#MyAppPublisher}
-AppPublisherURL={#MyAppURL}
-AppSupportURL={#MyAppURL}
-AppUpdatesURL={#MyAppURL}
-DefaultDirName={autopf}\{#MyAppName}
-DefaultGroupName={#MyAppName}
+AppId={{81C58217-7CFE-4046-A5E4-3ACAC4A5D65C}
+AppName={#AppName}
+AppVersion={#AppVersion}
+AppPublisher=OmniControl Team
+DefaultDirName={autopf}\{#AppName}
+DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
-PrivilegesRequired=admin
-PrivilegesRequiredOverridesAllowed=commandline
-OutputDir=Output
-OutputBaseFilename=OmniControl_Setup_v{#MyAppVersion}
-Compression=lzma2/max
+PrivilegesRequired=lowest
+PrivilegesRequiredOverridesAllowed=dialog
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
+Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\{#MyAppExeName}
-
-[Languages]
-Name: "english"; MessagesFile: "compiler:Default.isl"
+OutputDir=dist-installer
+OutputBaseFilename={#AppName}-Setup-{#AppVersion}
+SetupIconFile=assets\omnicontrol.ico
+UninstallDisplayIcon={app}\{#AppName}.exe
+CloseApplications=yes
+RestartApplications=no
 
 [Tasks]
-Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked
-Name: "autostart"; Description: "Start OmniControl automatically when Windows starts"; GroupDescription: "Windows Startup:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create a &desktop shortcut"; Flags: unchecked
+Name: "autostart"; Description: "Start {#AppName} when I sign in to Windows"; Flags: unchecked
 
 [Files]
-; Dist folder contents produced by build.bat (admin build by default)
-Source: "dist\OmniControl_Admin\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "dist\{#AppName}\*"; DestDir: "{app}"; Flags: recursesubdirs createallsubdirs ignoreversion
 
 [Icons]
-Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"
-Name: "{group}\OmniControl Diagnostics (Doctor)"; Filename: "{app}\{#MyAppExeName}"; Parameters: "--doctor"
-Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
-Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+Name: "{group}\{#AppName}"; Filename: "{app}\{#AppName}.exe"
+Name: "{group}\{#AppName} (Administrator)"; Filename: "{app}\{#AppName}-Admin.exe"
+Name: "{group}\{#AppName} Safe Mode"; Filename: "{app}\{#AppName}.exe"; Parameters: "--safe"
+Name: "{group}\{#AppName} Doctor"; Filename: "{app}\{#AppName}.exe"; Parameters: "--doctor"
+Name: "{autodesktop}\{#AppName}"; Filename: "{app}\{#AppName}.exe"; Tasks: desktopicon
 
 [Registry]
-; Optional start with Windows (HKCU Run key, unchecked/OFF by default)
-Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "OmniControl"; ValueData: """{app}\{#MyAppExeName}"""; Flags: uninsdeletevalue; Tasks: autostart
+; Autostart uses the normal exe on purpose: the Admin exe would raise a UAC prompt at every sign-in.
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "{#AppName}"; ValueData: """{app}\{#AppName}.exe"""; Flags: uninsdeletevalue; Tasks: autostart
 
 [Run]
-Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\{#AppName}.exe"; Description: "Start {#AppName} now"; Flags: nowait postinstall skipifsilent
 
-[UninstallDelete]
-; Clean up appdata logs and configs created during runtime
-Type: filesandordirs; Name: "{userappdata}\OmniControl\logs"
-Type: files; Name: "{userappdata}\OmniControl\config.json"
-Type: dirifempty; Name: "{userappdata}\OmniControl"
-
+; The user's settings (%APPDATA%\OmniControl) and logs are deliberately NOT removed on uninstall.

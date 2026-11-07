@@ -188,22 +188,20 @@ class SendInputBackend:
         arr = (INPUT * n)(*self._q)
         self._q.clear()
         sent = self._user32.SendInput(n, arr, ctypes.sizeof(INPUT))
-        if sent != n:      # blocked by UIPI (elevated game) or bad struct size
-            log.error("SendInput sent %d/%d (GetLastError=%d). Elevated game? Run as admin.",
-                      sent, n, ctypes.GetLastError())
+        # sent != n means a bad INPUT size or input already blocked by another thread. A UIPI block
+        # (elevated foreground window, we are not) is NOT reported here: Microsoft documents that
+        # neither the return value nor GetLastError reveals it. elevation.ElevationMonitor handles it.
+        if sent != n:
+            log.error("SendInput sent %d/%d (GetLastError=%d)", sent, n, ctypes.GetLastError())
 
 
 # ------------------------------------------------------------------ gateway
 class Gateway:
     def __init__(self, backend: Backend, button_map: Optional[dict] = None,
-                 axis_map: Optional[dict] = None,
-                 max_transitions_per_s: int = 200,
-                 on_rate_limit: Optional[Callable[[], None]] = None):
+                 axis_map: Optional[dict] = None):
         self.backend = backend
         self.button_map = dict(BUTTON_MAP, **(button_map or {}))
         self.axis_map = dict(AXIS_MAP, **(axis_map or {}))
-        self.max_transitions_per_s = max_transitions_per_s
-        self.on_rate_limit = on_rate_limit
         self._lock = threading.RLock()
         self._want_keys: set[str] = set()
         self._want_mouse: set[str] = set()
@@ -214,7 +212,6 @@ class Gateway:
         self._rem = [0.0, 0.0]                         # sub-pixel remainders
         self._last_flush: Optional[float] = None
         self._warned: set[str] = set()
-        self._transition_times: list[float] = []       # timestamps for rate limiting
         self.sent_moves = 0
 
     # --- state in -----------------------------------------------------------
@@ -258,7 +255,7 @@ class Gateway:
                         dx += whole
                     else:
                         dy += whole
-            self._sync_locked(dx, dy, now=now)
+            self._sync_locked(dx, dy)
 
     def release_all(self, reason: str = "") -> None:
         """Thread-safe emergency release. Safe to call from the watchdog thread."""
@@ -268,6 +265,15 @@ class Gateway:
             self._sync_locked()
         if held:
             log.warning("release_all (%s)", reason or "unspecified")
+
+    def update_maps(self, button_map: Optional[dict] = None, axis_map: Optional[dict] = None) -> None:
+        """Swap key bindings while running (config hot-reload). Everything is released FIRST, so
+        nothing can stay pressed under the old mapping. Same merge rules as the constructor."""
+        with self._lock:
+            self._clear_locked()
+            self._sync_locked()
+            self.button_map = dict(BUTTON_MAP, **(button_map or {}))
+            self.axis_map = dict(AXIS_MAP, **(axis_map or {}))
 
     @property
     def held(self) -> frozenset:
@@ -325,45 +331,16 @@ class Gateway:
             keys |= new
         return keys
 
-    def _sync_locked(self, dx: int = 0, dy: int = 0, now: float = 0.0) -> None:
+    def _sync_locked(self, dx: int = 0, dy: int = 0) -> None:
         want_k = self._want_keys | self._axis_desired_keys()
         b = self.backend
-        releases_k = self._held_keys - want_k
-        presses_k = want_k - self._held_keys
-        releases_m = self._held_mouse - self._want_mouse
-        presses_m = self._want_mouse - self._held_mouse
-        count = len(releases_k) + len(presses_k) + len(releases_m) + len(presses_m)
-
-        if count > 0 and self.max_transitions_per_s > 0 and now > 0:
-            cutoff = now - 1.0
-            self._transition_times = [t for t in self._transition_times if t > cutoff]
-            if len(self._transition_times) + count > self.max_transitions_per_s:
-                log.error("Rate limit exceeded (%d transitions in 1s, max %d): releasing all",
-                          len(self._transition_times) + count, self.max_transitions_per_s)
-                self._clear_locked()
-                for k in self._held_keys:
-                    b.key(k, False)
-                for m in self._held_mouse:
-                    b.mouse_button(m, False)
-                b.commit()
-                self._held_keys.clear()
-                self._held_mouse.clear()
-                if self.on_rate_limit:
-                    try:
-                        self.on_rate_limit()
-                    except Exception:
-                        log.exception("on_rate_limit callback failed")
-                return
-            for _ in range(count):
-                self._transition_times.append(now)
-
-        for k in releases_k:             # releases first
+        for k in self._held_keys - want_k:             # releases first
             b.key(k, False)
-        for k in presses_k:
+        for k in want_k - self._held_keys:
             b.key(k, True)
-        for m in releases_m:
+        for m in self._held_mouse - self._want_mouse:
             b.mouse_button(m, False)
-        for m in presses_m:
+        for m in self._want_mouse - self._held_mouse:
             b.mouse_button(m, True)
         if dx or dy:
             b.mouse_move(dx, dy)
@@ -386,6 +363,7 @@ class ForegroundWatcher:
         self._period = 1.0 / poll_hz
         self._next = 0.0
         self._cached = ""
+        self.pid = 0                       # pid of the foreground process (0 = unknown)
 
     def poll(self, now: float) -> str:
         if os.name != "nt" or now < self._next:
@@ -396,6 +374,7 @@ class ForegroundWatcher:
             hwnd = u32.GetForegroundWindow()
             pid = ctypes.c_ulong(0)
             u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            self.pid = pid.value
             h = k32.OpenProcess(0x1000, False, pid.value)      # PROCESS_QUERY_LIMITED_INFORMATION
             name = f"hwnd:{hwnd}"
             if h:
@@ -411,33 +390,15 @@ class ForegroundWatcher:
 
 
 class KillSwitch:
-    """Edge-detected global hotkey (default F12) + hardware-free panic chord (Ctrl+Alt+Shift+Q).
-    Works even when a game has focus.
-    """
+    """Edge-detected global hotkey (default F12). Works even when a game has focus."""
 
-    def __init__(self, vk: int = 0x7B, chord_enabled: bool = True):
-        self.vk = vk
-        self.chord_enabled = chord_enabled
-        self._was_vk = False
-        self._was_chord = False
+    def __init__(self, vk: int = 0x7B):
+        self.vk, self._was = vk, False
 
     def pressed_edge(self) -> bool:
         if os.name != "nt":
             return False
-        gas = ctypes.windll.user32.GetAsyncKeyState
-        down_vk = bool(gas(self.vk) & 0x8000)
-        edge_vk = down_vk and not self._was_vk
-        self._was_vk = down_vk
-
-        edge_chord = False
-        if self.chord_enabled:
-            # 0x11=VK_CONTROL, 0x12=VK_MENU(Alt), 0x10=VK_SHIFT, 0x51='Q'
-            ctrl = bool(gas(0x11) & 0x8000)
-            alt = bool(gas(0x12) & 0x8000)
-            shift = bool(gas(0x10) & 0x8000)
-            q = bool(gas(0x51) & 0x8000)
-            down_chord = ctrl and alt and shift and q
-            edge_chord = down_chord and not self._was_chord
-            self._was_chord = down_chord
-
-        return edge_vk or edge_chord
+        down = bool(ctypes.windll.user32.GetAsyncKeyState(self.vk) & 0x8000)
+        edge = down and not self._was
+        self._was = down
+        return edge

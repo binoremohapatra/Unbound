@@ -1,0 +1,11 @@
+# The engine itself (state machine, gateway, watchdog, config, doctor) uses only the standard library.
+# Tray icon (optional: without these the app runs, just without a tray icon):
+pystray>=0.19
+pillow>=10
+
+# Used by the teammates' adapters. Confirm the real list with Antas (webcam) and Dishti (audio),
+# then uncomment, and keep doctor.DEPENDENCIES in sync:
+# opencv-python
+# mediapipe
+# numpy
+# sounddevice

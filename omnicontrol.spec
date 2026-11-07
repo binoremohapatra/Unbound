@@ -1,78 +1,62 @@
 # -*- mode: python ; coding: utf-8 -*-
-"""PyInstaller spec for OmniControl.
+"""PyInstaller spec for OmniControl.   Build:  pyinstaller --noconfirm --clean omnicontrol.spec
 
-Supports building both:
-  - Admin build: requestedExecutionLevel = requireAdministrator
-  - Normal build: requestedExecutionLevel = asInvoker
+Output: dist/OmniControl/ (one folder, not one file: starts faster and trips antivirus less) with
+    OmniControl.exe         normal user (asInvoker). Can restart itself elevated: --elevate / tray menu.
+    OmniControl-Admin.exe   same program, manifest = requireAdministrator (UAC prompt on every start).
+Both share one set of libraries, so shipping two exes costs only a few hundred KB.
 
-Set environment variable OMNICONTROL_BUILD_ADMIN=1 for admin build, or 0 for normal.
-Defaults to admin build.
+Why hiddenimports: main.py loads adapters.* and mapping by NAME at run time (importlib), which
+PyInstaller's static analysis cannot see. Only modules that exist on disk are listed, so the build
+works today and picks up teammates' files automatically when they are added.
+
+OMNICONTROL_EXCLUDE=cv2,mediapipe,...  leaves those packages out of the bundle (smoke builds, or an
+engine-only build). Windowed exe (console=False): there is no stdout, so --doctor attaches to the
+parent terminal or shows a message box (see doctor.py).
 """
+import importlib.util
 import os
 import sys
+from pathlib import Path
 
-block_cipher = None
-build_admin = os.environ.get("OMNICONTROL_BUILD_ADMIN", "1") == "1"
-manifest_file = "manifest_admin.xml" if build_admin else "manifest_user.xml"
-build_name = "OmniControl_Admin" if build_admin else "OmniControl"
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+
+ROOT = Path(SPECPATH)                                  # noqa: F821  (provided by PyInstaller)
+APP_NAME = "OmniControl"
+ICON = ROOT / "assets" / "omnicontrol.ico"
+
+CANDIDATE_MODULES = [
+    "adapters.webcam", "adapters.audio", "adapters.switch",       # loaded by name in main.py
+    "mapping", "assist", "fastpath", "slowpath", "filters",       # Dishti / Antas, when they arrive
+]
+hiddenimports = [m for m in CANDIDATE_MODULES if (ROOT / (m.replace(".", "/") + ".py")).exists()]
+if sys.platform == "win32":
+    hiddenimports.append("pystray._win32")                        # backend chosen at run time
+
+datas, binaries = [], []
+for folder in ("profiles", "assets"):                             # read-only files shipped with the app
+    if (ROOT / folder).is_dir():
+        datas.append((str(ROOT / folder), folder))
+for pkg in ("mediapipe",):                                        # needs its model files at run time
+    if importlib.util.find_spec(pkg) is not None and pkg not in os.environ.get("OMNICONTROL_EXCLUDE", ""):
+        datas += collect_data_files(pkg)
+        binaries += collect_dynamic_libs(pkg)
+
+excludes = [m for m in os.environ.get("OMNICONTROL_EXCLUDE", "").split(",") if m]
+excludes += ["tkinter", "unittest", "pytest"]                     # never needed at run time
 
 a = Analysis(
-    ['omnicontrol.py'],
-    pathex=['.'],
-    binaries=[],
-    datas=[
-        ('manifest_admin.xml', '.'),
-        ('manifest_user.xml', '.'),
-    ],
-    hiddenimports=[
-        'pystray',
-        'PIL',
-        'sounddevice',
-        'cv2',
-        'numpy',
-        'ctypes',
-        'win32api',
-        'win32con',
-    ],
-    hookspath=[],
-    hooksconfig={},
-    runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib', 'scipy', 'torch'],
-    win_no_prefer_redirects=False,
-    win_private_assemblies=False,
-    cipher=block_cipher,
-    noarchive=False,
+    [str(ROOT / "main.py")],
+    pathex=[str(ROOT)],                                           # our flat modules win over site-packages
+    binaries=binaries, datas=datas, hiddenimports=hiddenimports,
+    hookspath=[], runtime_hooks=[], excludes=excludes, noarchive=False,
 )
+pyz = PYZ(a.pure)
 
-pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
+icon = str(ICON) if sys.platform == "win32" and ICON.exists() else None
+common = dict(exclude_binaries=True, console=False, debug=False, strip=False, upx=False, icon=icon)
 
-exe = EXE(
-    pyz,
-    a.scripts,
-    [],
-    exclude_binaries=True,
-    name='OmniControl',
-    debug=False,
-    bootloader_ignore_signals=False,
-    strip=False,
-    upx=True,
-    console=True,
-    disable_windowed_traceback=False,
-    argv_emulation=False,
-    target_arch=None,
-    codesign_identity=None,
-    entitlements_file=None,
-    manifest=manifest_file,
-)
+exe_user = EXE(pyz, a.scripts, [], name=APP_NAME, uac_admin=False, **common)
+exe_admin = EXE(pyz, a.scripts, [], name=f"{APP_NAME}-Admin", uac_admin=True, **common)
 
-coll = COLLECT(
-    exe,
-    a.binaries,
-    a.zipfiles,
-    a.datas,
-    strip=False,
-    upx=True,
-    upx_exclude=[],
-    name=build_name,
-)
-
+coll = COLLECT(exe_user, exe_admin, a.binaries, a.datas, strip=False, upx=False, name=APP_NAME)

@@ -1,420 +1,395 @@
-"""doctor.py (Binore): hardware and permission diagnostics for OmniControl.
+"""doctor.py (Binore): `main.py --doctor` checks the machine before a demo or a bug report.
 
-Usage:  python main.py --doctor
-Exit code 0 if no FAILs; non-zero if any FAIL present.
+Each check returns one Check(name, status, detail, fix). A check that crashes becomes a FAIL line,
+so the doctor itself never crashes. Exit code is 1 when any check FAILs, else 0.
 
-Every OS call is in a thin wrapper function so tests can mock it without touching ctypes.
+Verification honesty: on Linux the Windows-only checks report SKIP. Their Win32 code and the
+registry paths below were written from API documentation and have NOT run on a real Windows 11
+machine yet. Treat the first Windows run of --doctor as part of the manual test checklist.
+
+Assumption to confirm with Antas / Dishti: DEPENDENCIES lists the libraries I expect the webcam and
+audio adapters to use. Edit the tuple if their real requirements differ.
 """
 from __future__ import annotations
 
 import ctypes
+import importlib.util
+import json
 import logging
 import os
+import platform
+import struct
 import sys
 import time
-from dataclasses import dataclass
-from enum import Enum
-from typing import List
+from dataclasses import asdict, dataclass
+from typing import Callable, Optional
+
+import config
+import elevation
+import single_instance
+from version import __version__
 
 log = logging.getLogger("omnicontrol.doctor")
 
+OK, WARN, FAIL, SKIP = "OK", "WARN", "FAIL", "SKIP"
 
-class Status(str, Enum):
-    PASS = "PASS"
-    WARN = "WARN"
-    FAIL = "FAIL"
+# (import name, pip name, what needs it)
+DEPENDENCIES = (
+    ("cv2", "opencv-python", "webcam adapter"),
+    ("mediapipe", "mediapipe", "face and head tracking"),
+    ("numpy", "numpy", "webcam and audio adapters"),
+    ("sounddevice", "sounddevice", "microphone adapter"),
+    ("pystray", "pystray", "tray icon"),
+    ("PIL", "pillow", "tray icon"),
+)
+
+JITTER_OK_MS, JITTER_WARN_MS = 2.0, 5.0
+_CONSENT = r"Software\Microsoft\Windows\CurrentVersion\CapabilityAccessManager\ConsentStore\{}"
 
 
 @dataclass
-class CheckResult:
+class Check:
     name: str
-    status: Status
-    message: str
+    status: str
+    detail: str
     fix: str = ""
 
 
-# ── mockable OS wrappers ──────────────────────────────────────────────────────
-
-def _python_version_info():
-    return sys.version_info
+def _windows_only(name: str) -> Optional[Check]:
+    return None if os.name == "nt" else Check(name, SKIP, "Windows only")
 
 
-def _is_64bit() -> bool:
-    return ctypes.sizeof(ctypes.c_void_p) == 8
+# ------------------------------------------------------------------ environment
+def check_python() -> Check:
+    v, bits = sys.version_info, struct.calcsize("P") * 8
+    detail = f"Python {v.major}.{v.minor}.{v.micro}, {bits}-bit" + (", bundled" if getattr(sys, "frozen", False) else "")
+    if (v.major, v.minor) < (3, 11):
+        return Check("python", WARN, detail, "OmniControl targets Python 3.11")
+    return Check("python", OK, detail)
 
 
-def _sizeof_input() -> int:
-    from gateway import INPUT
-    return ctypes.sizeof(INPUT)
+def check_platform() -> Check:
+    if os.name != "nt":
+        return Check("platform", WARN, f"{platform.platform()} (not Windows)",
+                     "Input injection, F12 kill switch and window tracking only work on Windows")
+    build = sys.getwindowsversion().build
+    name = "Windows 11" if build >= 22000 else "Windows 10"
+    return Check("platform", OK, f"{name} (build {build})")
 
 
-def _is_admin() -> bool:
-    from elevation import is_admin
-    return is_admin()
+def check_elevation() -> Check:
+    if elevation.is_admin():
+        return Check("elevation", OK, "running as administrator: can control elevated games and apps")
+    return Check("elevation", WARN, "running as a normal user",
+                 "Elevated apps (some games, Task Manager) ignore our input. "
+                 "Start with --elevate or use OmniControl-Admin.exe if you need them.")
 
 
-def _check_foreground_elevation() -> tuple[bool, str]:
-    from elevation import check_foreground_elevation
-    return check_foreground_elevation()
+def check_running_instance(name: str = single_instance.APP_INSTANCE_NAME) -> Check:
+    """The camera and microphone can only be opened by one program, so a running OmniControl makes
+    the device checks below report 'busy'. Say so up front instead of blaming the hardware."""
+    probe = single_instance.SingleInstance(name)
+    if probe.acquire():
+        probe.release()
+        return Check("running instance", OK, "no other OmniControl is running")
+    return Check("running instance", WARN, "another OmniControl is already running",
+                 "Quit it first (tray icon > Quit): it holds the camera, so camera checks may fail")
 
 
-def _open_camera(index: int):
-    """Returns (width, height, fps). Raises on failure."""
-    import cv2  # noqa: ImportError handled by caller
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
-    if not cap.isOpened():
-        raise RuntimeError("Camera did not open")
-    ret, frame = cap.read()
-    if not ret or frame is None:
+def check_folders() -> Check:
+    problems, shown = [], []
+    for label, folder in (("config", config.config_dir()), ("logs", config.log_dir())):
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            probe = folder / f".doctor-{os.getpid()}.tmp"
+            probe.write_text("x")
+            probe.unlink()
+            shown.append(f"{label}: {folder}")
+        except OSError as e:
+            problems.append(f"{label} {folder}: {e}")
+    if problems:
+        return Check("folders", FAIL, "; ".join(problems),
+                     "Check disk space and folder permissions, or set OMNICONTROL_HOME to a writable folder")
+    return Check("folders", OK, "; ".join(shown))
+
+
+def check_dependencies() -> Check:
+    missing = [(imp, pip, why) for imp, pip, why in DEPENDENCIES
+               if importlib.util.find_spec(imp) is None]
+    if not missing:
+        return Check("dependencies", OK, f"all {len(DEPENDENCIES)} optional libraries present")
+    names = ", ".join(f"{pip} ({why})" for _, pip, why in missing)
+    pips = " ".join(pip for _, pip, _ in missing)
+    if getattr(sys, "frozen", False):          # nothing can be pip-installed into a built exe
+        fix = (f"This build does not include them. Run 'pip install {pips}' in the build "
+               "environment, then rebuild (build.ps1).")
+    else:
+        fix = f"pip install {pips}"
+    return Check("dependencies", WARN, f"missing: {names}",
+                 fix + ". The engine still runs on its built-in fallbacks without them.")
+
+
+# ------------------------------------------------------------------ privacy settings
+def _read_registry(hive: str, path: str, value: str) -> Optional[str]:
+    import winreg
+    root = {"HKLM": winreg.HKEY_LOCAL_MACHINE, "HKCU": winreg.HKEY_CURRENT_USER}[hive]
+    try:
+        with winreg.OpenKey(root, path) as key:
+            return str(winreg.QueryValueEx(key, value)[0])
+    except OSError:
+        return None
+
+
+def check_privacy(kind: str, reader: Optional[Callable[[str, str, str], Optional[str]]] = None) -> Check:
+    """kind: 'webcam' or 'microphone'. Only an explicit "Deny" fails: a missing value just means
+    Windows has never been asked, which is fine. `reader` is injectable for tests."""
+    label = {"webcam": "Camera", "microphone": "Microphone"}[kind]
+    name = f"{kind} privacy"
+    if reader is None:
+        skip = _windows_only(name)
+        if skip:
+            return skip
+        reader = _read_registry
+    path = _CONSENT.format(kind)
+    places = (("HKLM", path, "system-wide switch"),
+              ("HKCU", path, "your account's switch"),
+              ("HKCU", path + r"\NonPackaged", "'desktop apps' switch"))
+    denied = [what for hive, p, what in places if (reader(hive, p, "Value") or "").lower() == "deny"]
+    if denied:
+        return Check(name, FAIL, f"{label} access is denied by the {', '.join(denied)}",
+                     f"Settings > Privacy & security > {label}: turn on access, including "
+                     f"'Let desktop apps access your {label.lower()}'")
+    return Check(name, OK, f"{label} access is not blocked")
+
+
+# ------------------------------------------------------------------ devices
+def _probe_camera_cv2(index: int = 0) -> Optional[dict]:
+    import cv2
+    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
+    try:
+        if not cap.isOpened():
+            return None
+        got, t0 = 0, time.perf_counter()
+        for _ in range(15):
+            got += 1 if cap.read()[0] else 0
+        dt = max(1e-6, time.perf_counter() - t0)
+        return {"frames": got, "fps": got / dt,
+                "size": (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))}
+    finally:
         cap.release()
-        raise RuntimeError("No frame received")
-    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-    fps = cap.get(cv2.CAP_PROP_FPS)
-    cap.release()
-    return w, h, fps
 
 
-def _open_mic(sample_rate: int, duration_s: float) -> float:
-    """Returns RMS level. Raises on failure."""
-    import numpy as np       # noqa
-    import sounddevice as sd  # noqa
-    data = sd.rec(
-        int(sample_rate * duration_s), samplerate=sample_rate,
-        channels=1, dtype="float32", blocking=True,
-    )
-    return float(np.sqrt(np.mean(data ** 2)))
+def check_camera(probe: Optional[Callable[[], Optional[dict]]] = None) -> Check:
+    if probe is None:
+        if importlib.util.find_spec("cv2") is None:
+            return Check("camera", SKIP, "OpenCV not installed, cannot open the camera from here")
+        probe = _probe_camera_cv2
+    info = probe()
+    fix_busy = "Plug it in, close apps that use it (Teams, Zoom, OBS, a running OmniControl), check privacy settings"
+    if info is None:
+        return Check("camera", FAIL, "no camera opened at index 0", fix_busy)
+    w, h = info["size"]
+    detail = f"{w}x{h}, {info['fps']:.0f} fps measured, {info['frames']}/15 frames"
+    if info["frames"] == 0:
+        return Check("camera", FAIL, detail, fix_busy)
+    if info["fps"] < 20:
+        return Check("camera", WARN, detail,
+                     "Low frame rate adds latency. Improve lighting (cameras slow down in the dark) "
+                     "and turn off auto low-light in the camera app")
+    return Check("camera", OK, detail)
 
 
-def _get_dpi_awareness() -> int:
-    """Returns GetProcessDpiAwareness value: 0=unaware, 1=system, 2=per-monitor. -1 on error."""
-    if os.name != "nt":
-        return -1
+def _probe_microphone_sd() -> list:
+    import sounddevice as sd
+    return [d["name"] for d in sd.query_devices() if d.get("max_input_channels", 0) > 0]
+
+
+def check_microphone(probe: Optional[Callable[[], list]] = None) -> Check:
+    if probe is None:
+        if importlib.util.find_spec("sounddevice") is None:
+            return Check("microphone", SKIP, "sounddevice not installed, cannot list input devices")
+        probe = _probe_microphone_sd
     try:
-        val = ctypes.c_int(0)
-        hr = ctypes.windll.shcore.GetProcessDpiAwareness(None, ctypes.byref(val))
-        return val.value if hr == 0 else -1
-    except Exception:
-        return -1
+        names = probe()
+    except Exception as e:                        # PortAudio can fail in odd ways
+        return Check("microphone", FAIL, f"could not query audio devices: {e}")
+    if not names:
+        return Check("microphone", FAIL, "no input device found",
+                     "Plug in a microphone and check Settings > System > Sound > Input")
+    return Check("microphone", OK, f"{len(names)} input device(s), first: {names[0]}")
 
 
-def _get_monitor_count() -> int:
-    if os.name != "nt":
-        return 1
+# ------------------------------------------------------------------ Windows input / display
+def check_sendinput() -> Check:
+    skip = _windows_only("sendinput")
+    if skip:
+        return skip
+    from ctypes import wintypes
+
+    from gateway import INPUT, build_mouse_move_input
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    user32.SendInput.argtypes = (wintypes.UINT, ctypes.POINTER(INPUT), ctypes.c_int)
+    user32.SendInput.restype = wintypes.UINT
+    arr = (INPUT * 1)(build_mouse_move_input(0, 0))       # a zero move: nothing visible happens
+    ctypes.set_last_error(0)
+    sent = user32.SendInput(1, arr, ctypes.sizeof(INPUT))
+    detail = f"INPUT is {ctypes.sizeof(INPUT)} bytes; SendInput accepted {sent}/1 test event"
+    if sent != 1:
+        err = ctypes.get_last_error()
+        if err == 5:
+            return Check("sendinput", WARN,
+                         f"{detail} (GetLastError=5: non-interactive session or UIPI)",
+                         "Elevated apps or non-interactive sessions block SendInput. Start with --elevate or run from an interactive desktop.")
+        return Check("sendinput", FAIL, f"{detail} (GetLastError={err})",
+                     "Another program may be blocking input injection (some security software does)")
+    return Check("sendinput", OK, detail + ". Cannot detect UIPI: that is checked per foreground app")
+
+
+def check_display() -> Check:
+    skip = _windows_only("display")
+    if skip:
+        return skip
     try:
-        return ctypes.windll.user32.GetSystemMetrics(80)  # SM_CMONITORS
-    except Exception:
-        return 1
+        dpi = ctypes.WinDLL("user32").GetDpiForSystem()
+    except (AttributeError, OSError):
+        return Check("display", SKIP, "GetDpiForSystem unavailable (older Windows)")
+    return Check("display", OK, f"system scale {dpi / 96 * 100:.0f}%. Relative mouse aim is unaffected "
+                 "by DPI; dashboard windows should be per-monitor DPI aware to stay sharp")
 
 
-def _get_primary_resolution() -> tuple[int, int]:
-    if os.name != "nt":
-        return (1920, 1080)
+def check_pointer_precision() -> Check:
+    skip = _windows_only("pointer precision")
+    if skip:
+        return skip
+    SPI_GETMOUSE, SPI_GETMOUSESPEED = 0x0003, 0x0070
+    user32 = ctypes.WinDLL("user32", use_last_error=True)
+    params, speed = (ctypes.c_int * 3)(), ctypes.c_int()
+    if not user32.SystemParametersInfoW(SPI_GETMOUSE, 0, params, 0):
+        return Check("pointer precision", SKIP, "could not read mouse settings")
+    user32.SystemParametersInfoW(SPI_GETMOUSESPEED, 0, ctypes.byref(speed), 0)
+    detail = f"'Enhance pointer precision' is {'ON' if params[2] else 'off'}, pointer speed {speed.value}/20"
+    if params[2]:
+        return Check("pointer precision", WARN, detail,
+                     "Injected head-aim moves get accelerated in desktop apps and some games, so aim feels "
+                     "non-linear. Settings > Bluetooth & devices > Mouse > Additional mouse settings > "
+                     "Pointer Options > untick 'Enhance pointer precision'")
+    return Check("pointer precision", OK, detail)
+
+
+# ------------------------------------------------------------------ timing
+def jitter_stats(stamps: list[float], hz: float) -> tuple[float, float]:
+    """(p99, worst) in ms: how far each frame landed from its slot on the 1/hz grid.
+
+    Measured against the schedule, not against the previous frame: one late frame would otherwise
+    count twice (late interval, then a short one) and p99 would always equal the worst."""
+    period = 1.0 / hz
+    dev = [(t - stamps[0]) - i * period for i, t in enumerate(stamps)]
+    mid = sorted(dev)[len(dev) // 2]
+    errs = sorted(abs(d - mid) * 1000.0 for d in dev)
+    return errs[int(0.99 * (len(errs) - 1))], errs[-1]
+
+
+def check_loop_jitter(seconds: float = 1.5, hz: float = 60.0) -> Check:
+    """Run the real FrameClock and report how far frames land from their 16.7 ms slots."""
+    from watchdog import FrameClock
+    winmm = None
+    if os.name == "nt":
+        try:
+            winmm = ctypes.WinDLL("winmm")
+            winmm.timeBeginPeriod(1)
+        except OSError:
+            winmm = None
     try:
-        return (
-            ctypes.windll.user32.GetSystemMetrics(0),
-            ctypes.windll.user32.GetSystemMetrics(1),
-        )
-    except Exception:
-        return (0, 0)
+        fc, stamps = FrameClock(hz), []
+        for _ in range(max(3, int(seconds * hz))):
+            stamps.append(fc.wait())
+    finally:
+        if winmm is not None:
+            winmm.timeEndPeriod(1)
+    p99, worst = jitter_stats(stamps, hz)
+    detail = f"{hz:.0f} Hz loop: p99 jitter {p99:.2f} ms, worst {worst:.2f} ms, overruns {fc.overruns}"
+    if p99 <= JITTER_OK_MS and fc.overruns == 0:
+        return Check("loop jitter", OK, detail)
+    fix = "Close heavy background apps, plug in the laptop, set the power plan to High performance"
+    return Check("loop jitter", WARN if p99 <= JITTER_WARN_MS else FAIL, detail, fix)
 
 
-def _send_input_self_test() -> int:
-    """Inject F24 down+up. Returns count sent (expect 2). Non-Windows: returns 2."""
-    if os.name != "nt":
-        return 2
-    from gateway import INPUT, INPUT_KEYBOARD, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE
+# ------------------------------------------------------------------ run + report
+def run_all(slow: bool = True) -> list[Check]:
+    """slow=False skips the camera open and the 1.5 s jitter run (quick checks only)."""
+    plan: list[tuple[str, Callable[[], Check]]] = [
+        ("python", check_python), ("platform", check_platform), ("elevation", check_elevation),
+        ("running instance", check_running_instance), ("folders", check_folders),
+        ("dependencies", check_dependencies),
+        ("webcam privacy", lambda: check_privacy("webcam")),
+        ("microphone privacy", lambda: check_privacy("microphone")),
+        ("sendinput", check_sendinput), ("display", check_display),
+        ("pointer precision", check_pointer_precision),
+    ]
+    if slow:
+        plan += [("camera", check_camera), ("microphone", check_microphone),
+                 ("loop jitter", check_loop_jitter)]
+    out: list[Check] = []
+    for name, fn in plan:
+        try:
+            out.append(fn())
+        except Exception as e:                    # the doctor must never crash
+            log.exception("check %s crashed", name)
+            out.append(Check(name, FAIL, f"check crashed: {type(e).__name__}: {e}"))
+    return out
 
-    F24_SCAN = 0x76  # F24 — not bound to anything in games or Windows
 
-    def _ki(flags: int) -> INPUT:
-        inp = INPUT(type=INPUT_KEYBOARD)
-        inp.u.ki.wVk = 0
-        inp.u.ki.wScan = F24_SCAN
-        inp.u.ki.dwFlags = flags
-        return inp
-
-    arr = (INPUT * 2)(_ki(KEYEVENTF_SCANCODE), _ki(KEYEVENTF_SCANCODE | KEYEVENTF_KEYUP))
-    return ctypes.windll.user32.SendInput(2, arr, ctypes.sizeof(INPUT))
+def exit_code(checks: list[Check]) -> int:
+    return 1 if any(c.status == FAIL for c in checks) else 0
 
 
-def _time_begin_period_1() -> bool:
-    """Returns True if timeBeginPeriod(1) succeeded (TIMERR_NOERROR == 0)."""
-    if os.name != "nt":
+def format_report(checks: list[Check]) -> str:
+    tag = {OK: "[ OK ]", WARN: "[WARN]", FAIL: "[FAIL]", SKIP: "[skip]"}
+    lines = [f"OmniControl {__version__} doctor", ""]
+    for c in checks:
+        lines.append(f"{tag[c.status]} {c.name}: {c.detail}")
+        if c.fix and c.status in (WARN, FAIL):
+            lines.append(f"       fix: {c.fix}")
+    n = {s: sum(c.status == s for c in checks) for s in (OK, WARN, FAIL, SKIP)}
+    lines += ["", f"{n[OK]} ok, {n[WARN]} warnings, {n[FAIL]} failures, {n[SKIP]} skipped"]
+    return "\n".join(lines)
+
+
+def attach_parent_console() -> bool:
+    """A windowed (no console) exe started from cmd/PowerShell: borrow that terminal for output."""
+    if os.name != "nt" or sys.stdout is not None:
+        return False
+    try:
+        if not ctypes.WinDLL("kernel32", use_last_error=True).AttachConsole(0xFFFFFFFF):
+            return False                          # ATTACH_PARENT_PROCESS: no parent console (double-click)
+        sys.stdout = sys.stderr = open("CONOUT$", "w", encoding="utf-8")
         return True
-    try:
-        return ctypes.windll.winmm.timeBeginPeriod(1) == 0
-    except Exception:
+    except OSError:
         return False
 
 
-def _measure_60hz_jitter_p99(duration_s: float = 3.0) -> float:
-    """Returns p99 tick interval (ms) of a real 60 Hz FrameClock run."""
-    from watchdog import FrameClock
-
-    fc = FrameClock(hz=60.0)
-    intervals: list[float] = []
-    prev = time.perf_counter()
-    end = prev + duration_s
-    while time.perf_counter() < end:
-        fc.wait()
-        t = time.perf_counter()
-        intervals.append((t - prev) * 1000.0)
-        prev = t
-    if not intervals:
-        return 0.0
-    intervals.sort()
-    idx = min(len(intervals) - 1, int(0.99 * (len(intervals) - 1)))
-    return intervals[idx]
-
-
-def _module_importable(name: str) -> bool:
-    import importlib.util
-    return importlib.util.find_spec(name) is not None
-
-
-# ── individual check functions ────────────────────────────────────────────────
-
-def check_python() -> CheckResult:
-    vi = _python_version_info()
-    ver = f"{vi[0]}.{vi[1]}.{vi[2]}"
-    if (vi[0], vi[1]) < (3, 11):
-        return CheckResult(
-            "Python version", Status.FAIL, f"Python {ver} (need ≥ 3.11)",
-            "Install Python 3.11+ from https://python.org",
-        )
-    return CheckResult("Python version", Status.PASS, f"Python {ver}")
-
-
-def check_64bit() -> CheckResult:
-    if _is_64bit():
-        return CheckResult("64-bit process", Status.PASS, "64-bit OK")
-    return CheckResult(
-        "64-bit process", Status.FAIL, "Running as 32-bit process",
-        "Use the 64-bit Python installer from python.org",
-    )
-
-
-def check_input_struct() -> CheckResult:
-    sz = _sizeof_input()
-    if sz == 40:
-        return CheckResult("INPUT struct size", Status.PASS, f"sizeof(INPUT) = {sz} ✓")
-    return CheckResult(
-        "INPUT struct size", Status.FAIL,
-        f"sizeof(INPUT) = {sz} bytes (expected 40)",
-        "Ensure 64-bit Python; check ctypes field alignment in gateway.py",
-    )
-
-
-def check_admin() -> CheckResult:
-    if _is_admin():
-        return CheckResult("Admin status", Status.PASS, "Running as administrator")
-    return CheckResult(
-        "Admin status", Status.WARN, "Not running as administrator",
-        "Right-click OmniControl → 'Run as administrator', or use the Admin build",
-    )
-
-
-def check_uipi() -> CheckResult:
-    problem, msg = _check_foreground_elevation()
-    if problem:
-        return CheckResult(
-            "Foreground app / UIPI", Status.WARN, msg,
-            "Restart OmniControl as administrator",
-        )
-    return CheckResult(
-        "Foreground app / UIPI", Status.PASS,
-        "Foreground app not elevated (or we are admin)",
-    )
-
-
-def check_camera() -> CheckResult:
-    try:
-        w, h, fps = _open_camera(0)
-        fps_note = " — limited to 30 fps, face latency may be higher" if fps and fps <= 30 else ""
-        return CheckResult(
-            "Camera", Status.PASS, f"{w}×{h} @ {fps:.0f} fps{fps_note}"
-        )
-    except ImportError:
-        return CheckResult(
-            "Camera", Status.WARN, "opencv-python not installed",
-            "pip install opencv-python",
-        )
-    except Exception as exc:
-        return CheckResult(
-            "Camera", Status.FAIL, f"Cannot open camera index 0: {exc}",
-            "Settings → Privacy & security → Camera → "
-            "'Let desktop apps access your camera'",
-        )
-
-
-def check_microphone() -> CheckResult:
-    try:
-        rms = _open_mic(16000, 1.0)
-        if rms < 0.001:
-            return CheckResult(
-                "Microphone", Status.WARN,
-                f"Opened OK but RMS={rms:.5f} (is the mic muted or disconnected?)",
-                "Check microphone levels in Sound settings",
-            )
-        return CheckResult("Microphone", Status.PASS, f"1 s audio RMS={rms:.4f}")
-    except ImportError:
-        return CheckResult(
-            "Microphone", Status.WARN, "sounddevice not installed",
-            "pip install sounddevice numpy",
-        )
-    except Exception as exc:
-        return CheckResult(
-            "Microphone", Status.FAIL, f"Cannot open microphone: {exc}",
-            "Settings → Privacy & security → Microphone → "
-            "'Let desktop apps access your microphone'",
-        )
-
-
-def check_display() -> CheckResult:
-    awareness = _get_dpi_awareness()
-    monitors = _get_monitor_count()
-    w, h = _get_primary_resolution()
-    awareness_str = {0: "unaware", 1: "system-DPI", 2: "per-monitor-v2"}.get(
-        awareness, f"unknown({awareness})"
-    )
-    ok = awareness == 2 or os.name != "nt"
-    status = Status.PASS if ok else Status.WARN
-    msg = f"DPI={awareness_str}, {monitors} monitor(s), primary={w}×{h}"
-    fix = "Call SetProcessDpiAwarenessContext at startup (already done in main.py)" if not ok else ""
-    return CheckResult("Display / DPI", status, msg, fix)
-
-
-def check_send_input() -> CheckResult:
-    if os.name != "nt":
-        return CheckResult(
-            "SendInput self-test", Status.WARN,
-            "Non-Windows: skipped", "Run on Windows",
-        )
-    try:
-        sent = _send_input_self_test()
-        if sent == 2:
-            return CheckResult(
-                "SendInput self-test", Status.PASS,
-                "F24 down+up: 2/2 sent OK",
-            )
-        return CheckResult(
-            "SendInput self-test", Status.FAIL,
-            f"SendInput sent {sent}/2 (GetLastError={ctypes.GetLastError()})",
-            "Run as admin; check if kernel anti-cheat is active",
-        )
-    except Exception as exc:
-        return CheckResult(
-            "SendInput self-test", Status.FAIL,
-            f"SendInput raised: {exc}",
-            "Check gateway.py struct layout (must be 40 bytes on x64)",
-        )
-
-
-def check_timer() -> CheckResult:
-    if not _time_begin_period_1():
-        return CheckResult(
-            "Timer resolution", Status.WARN,
-            "timeBeginPeriod(1) failed — sleep granularity will be ~15 ms",
-            "Ensure winmm.dll is present (should always be on Windows)",
-        )
-    try:
-        p99 = _measure_60hz_jitter_p99(3.0)
-        status = Status.PASS if p99 < 3.0 else Status.WARN
-        fix = "High system load; close background apps or GPU-intensive processes" if p99 >= 3.0 else ""
-        return CheckResult(
-            "60 Hz loop p99 jitter", status,
-            f"p99 tick = {p99:.2f} ms (threshold 3.0 ms)", fix,
-        )
-    except Exception as exc:
-        return CheckResult("60 Hz loop p99 jitter", Status.WARN, f"Jitter test failed: {exc}")
-
-
-_OPTIONAL_DEPS = [
-    ("mediapipe",    "pip install mediapipe",         "face/pose tracking (Antas)"),
-    ("vosk",         "pip install vosk",               "offline speech recognition (Dishti)"),
-    ("sounddevice",  "pip install sounddevice numpy",  "microphone input"),
-    ("brainflow",    "pip install brainflow",           "BCI / EEG input"),
-    ("pystray",      "pip install pystray pillow",      "system tray icon"),
-    ("PIL",          "pip install pillow",              "image support for tray"),
-    ("cv2",          "pip install opencv-python",       "webcam capture"),
-]
-
-
-def check_optional_deps() -> List[CheckResult]:
-    results = []
-    for mod, install_cmd, purpose in _OPTIONAL_DEPS:
-        present = _module_importable(mod)
-        results.append(CheckResult(
-            f"Optional: {mod}",
-            Status.PASS if present else Status.WARN,
-            f"{'installed' if present else 'missing'} — {purpose}",
-            install_cmd if not present else "",
-        ))
-    return results
-
-
-def run_all() -> List[CheckResult]:
-    """Run every check sequentially. Returns list of CheckResult."""
-    results: List[CheckResult] = [
-        check_python(),
-        check_64bit(),
-        check_input_struct(),
-        check_admin(),
-        check_uipi(),
-        check_camera(),
-        check_microphone(),
-        check_display(),
-        check_send_input(),
-        check_timer(),
-    ]
-    results.extend(check_optional_deps())
-    return results
-
-
-# ── pretty-print ─────────────────────────────────────────────────────────────
-
-_RESET  = "\033[0m"
-_GREEN  = "\033[92m"
-_YELLOW = "\033[93m"
-_RED    = "\033[91m"
-
-
-def _col(s: Status) -> str:
-    return {Status.PASS: _GREEN, Status.WARN: _YELLOW, Status.FAIL: _RED}[s]
-
-
-def print_table(results: List[CheckResult]) -> None:
-    width = 70
-    print(f"\n{'OmniControl Doctor':=^{width}}")
-    for r in results:
-        col = _col(r.status)
-        badge = f"[{r.status.value}]"
-        print(f"  {col}{badge:6}{_RESET} {r.name:<32} {r.message}")
-        if r.fix:
-            print(f"{'':9}↳ Fix: {r.fix}")
-    print("=" * width)
-    fails = sum(1 for r in results if r.status == Status.FAIL)
-    warns = sum(1 for r in results if r.status == Status.WARN)
-    print(f"  Result: {fails} FAIL(s), {warns} WARN(s)\n")
-    if fails:
-        print(f"{_RED}FAIL: Critical checks failed — see fixes above.{_RESET}")
-    else:
-        print(f"{_GREEN}All critical checks passed.{_RESET}")
-
-
-def doctor_main() -> int:
-    """Run from main.py --doctor. Returns shell exit code (0 = all clear)."""
-    logging.basicConfig(level=logging.WARNING, format="%(message)s")
-    if os.name == "nt":
+def show_message_box(title: str, text: str) -> None:
+    """Skipped when OMNICONTROL_NO_GUI is set (build scripts and CI must never block on a dialog)."""
+    if os.name == "nt" and not os.environ.get("OMNICONTROL_NO_GUI"):
         try:
-            import ctypes
-            ctypes.windll.shcore.SetProcessDpiAwareness(2)
+            ctypes.windll.user32.MessageBoxW(None, text[:1800], title, 0x40)   # MB_ICONINFORMATION
         except Exception:
-            pass
-    print("\nOmniControl Hardware & Permission Diagnostics")
-    print("(Camera/mic/timer tests take a few seconds)\n")
-    results = run_all()
-    print_table(results)
-    return 1 if any(r.status == Status.FAIL for r in results) else 0
+            log.exception("message box failed")
 
+
+def run_cli(as_json: bool = False, slow: bool = True) -> int:
+    """Entry point for --doctor. Always saves doctor-report.txt in the log folder: a windowed exe
+    started by double-click has no terminal, so it also shows the result in a message box."""
+    attach_parent_console()
+    checks = run_all(slow)
+    text = json.dumps([asdict(c) for c in checks], indent=2) if as_json else format_report(checks)
+    try:
+        config.log_dir().mkdir(parents=True, exist_ok=True)
+        (config.log_dir() / "doctor-report.txt").write_text(format_report(checks) + "\n", encoding="utf-8")
+    except OSError:
+        log.warning("could not save doctor-report.txt")
+    if sys.stdout is not None:
+        print(text)
+    else:
+        show_message_box("OmniControl doctor", format_report(checks))
+    return exit_code(checks)

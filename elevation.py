@@ -1,208 +1,196 @@
-"""elevation.py (Binore): Windows privilege detection and controlled UAC re-launch.
+"""elevation.py (Binore): admin awareness and UIPI detection.
 
-Design rules (never violated):
-  - Never disable security software, never edit the registry for UIPI.
-  - Never use drivers or kernel tricks to bypass integrity levels.
-  - If the user declines UAC, continue non-elevated with a clear warning.
-  - uiAccess="true" requires a code-signed exe in a trusted location; documented only.
+Why this exists: Windows blocks input injection from a normal process into an elevated window
+(UIPI). Microsoft documents that SendInput gives NO signal for this: neither the return value
+nor GetLastError reports a UIPI block. So "SendInput returned n" does not prove the game got the
+key. The only reliable defence is to know up front that the foreground app is elevated while we
+are not, tell the user, and offer to restart as admin.
 
-Known hard limits (by OS design, not bugs):
-  - Input cannot reach the UAC secure desktop (Ctrl+Alt+Del, UAC prompt).
-  - Input cannot reach the Windows lock screen or logonUI.exe.
-  - Games protected by kernel anti-cheat (BattlEye, EAC, Vanguard kernel driver) block
-    SendInput at a level below any user-mode process — admin does not help.
-  - Online games may ban accounts that inject synthetic input, regardless of method.
+Pieces:
+  is_admin()                 are WE elevated
+  relaunch_as_admin(args)    UAC "runas" relaunch (the --elevate flag)
+  process_elevation(pid)     elevated / normal / likely_elevated / unknown for any process
+  ElevationMonitor           caches the probe per foreground pid; reports only on change
+
+The token probe is a heuristic where noted. It has only been exercised through fakes on Linux.
 """
 from __future__ import annotations
 
+import ctypes
 import logging
 import os
+import subprocess
 import sys
-from typing import Optional
+from dataclasses import dataclass
+from typing import Callable, Optional, Sequence
 
 log = logging.getLogger("omnicontrol.elevation")
 
-UIPI_LIMITS = """
-Known limits (by Windows design — not bugs we can work around):
-  • Input cannot reach the UAC secure desktop (Ctrl+Alt+Del, UAC prompts, Credential UI).
-  • Input cannot reach the Windows lock screen or LogonUI.exe.
-  • Kernel anti-cheat (BattlEye, EAC, Vanguard kernel-driver mode) blocks SendInput below
-    user-mode; running as admin does NOT help against these.
-  • Online games: injected input may trigger anti-cheat bans. Use ONLY story / offline modes.
-  • uiAccess="true" (inject into higher-integrity contexts) requires a code-signed .exe
-    installed under C:\\Program Files\\... — documented as an optional advanced path only.
-"""
+ELEVATE_FLAG = "--elevate"        # user asks: restart me as admin if I am not
+ELEVATED_FLAG = "--elevated"      # marker on the relaunched copy so we can never loop
+
+NORMAL, ELEVATED, LIKELY_ELEVATED, UNKNOWN = "normal", "elevated", "likely_elevated", "unknown"
+
+ERROR_ACCESS_DENIED = 5
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+TOKEN_QUERY = 0x0008
+TOKEN_INFO_ELEVATION = 20          # TOKEN_INFORMATION_CLASS: TokenElevation
+SW_SHOWNORMAL = 1
+UNKNOWN_ERR = -1                   # "a Win32 call failed but GetLastError was 0"
 
 
-# ── mockable OS wrappers ─────────────────────────────────────────────────────
-# Every Windows API call goes through one of these thin functions so unit tests
-# can patch them without touching ctypes.
-
-def _is_user_an_admin() -> bool:
-    if os.name != "nt":
-        return False
-    try:
-        import ctypes
-        return bool(ctypes.windll.shell32.IsUserAnAdmin())
-    except Exception:
-        return False
+class TOKEN_ELEVATION(ctypes.Structure):
+    _fields_ = [("TokenIsElevated", ctypes.c_uint32)]
 
 
-def _shell_execute_w(hwnd, op: str, file: str, params: str,
-                     directory: Optional[str], show: int) -> int:
-    """ShellExecuteW returns > 32 on success."""
-    if os.name != "nt":
-        return 0
-    import ctypes
-    return ctypes.windll.shell32.ShellExecuteW(hwnd, op, file, params, directory, show)
-
-
-def _open_process(access: int, inherit: bool, pid: int) -> int:
-    if os.name != "nt":
-        return 0
-    import ctypes
-    return ctypes.windll.kernel32.OpenProcess(access, inherit, pid)
-
-
-def _close_handle(h: int) -> None:
-    if os.name != "nt" or not h:
-        return
-    import ctypes
-    ctypes.windll.kernel32.CloseHandle(h)
-
-
-def _open_process_token(process: int, access: int, token_ref) -> bool:
-    if os.name != "nt":
-        return False
-    import ctypes
-    return bool(ctypes.windll.advapi32.OpenProcessToken(process, access, token_ref))
-
-
-def _get_token_information(token, info_class: int, buf, buf_size: int, ret_len) -> bool:
-    if os.name != "nt":
-        return False
-    import ctypes
-    return bool(ctypes.windll.advapi32.GetTokenInformation(
-        token, info_class, buf, buf_size, ret_len))
-
-
-def _get_foreground_window_pid() -> int:
-    """Returns PID of the current foreground window, or 0 on failure."""
-    if os.name != "nt":
-        return 0
-    import ctypes
-    u32 = ctypes.windll.user32
-    hwnd = u32.GetForegroundWindow()
-    if not hwnd:
-        return 0
-    pid = ctypes.c_ulong(0)
-    u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-    return pid.value
-
-
-# ── public API ───────────────────────────────────────────────────────────────
-
+# ------------------------------------------------------------------ are we admin
 def is_admin() -> bool:
-    """True if the current process holds administrator privileges."""
-    return _is_user_an_admin()
-
-
-def is_pid_elevated(pid: int) -> bool:
-    """True if the process `pid` is running elevated (high integrity).
-
-    Uses OpenProcess → OpenProcessToken → GetTokenInformation(TokenElevation).
-    Returns False on any error — safe default.
-    """
-    if os.name != "nt" or not pid:
-        return False
-    import ctypes
-
-    PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
-    TOKEN_QUERY = 0x0008
-    TokenElevation = 20          # TOKEN_INFORMATION_CLASS value
-
-    h_proc = _open_process(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
-    if not h_proc:
-        return False
-    try:
-        token = ctypes.c_void_p(0)
-        if not _open_process_token(h_proc, TOKEN_QUERY, ctypes.byref(token)):
-            return False
+    if os.name == "nt":
         try:
-            elevation = ctypes.c_uint(0)
-            ret_len = ctypes.c_ulong(0)
-            ok = _get_token_information(
-                token, TokenElevation,
-                ctypes.byref(elevation), ctypes.sizeof(elevation),
-                ctypes.byref(ret_len),
-            )
-            return bool(elevation.value) if ok else False
-        finally:
-            _close_handle(token.value)
-    finally:
-        _close_handle(h_proc)
+            return bool(ctypes.windll.shell32.IsUserAnAdmin())
+        except Exception:
+            log.exception("IsUserAnAdmin failed")
+            return False
+    return hasattr(os, "geteuid") and os.geteuid() == 0
 
 
-def check_foreground_elevation() -> tuple[bool, str]:
-    """Check whether the foreground window's process is elevated while we are not.
+# ------------------------------------------------------------------ relaunch as admin
+def build_relaunch(args: Sequence[str], *, frozen: bool, executable: str,
+                   script: str) -> tuple[str, str]:
+    """(file, parameters) for ShellExecuteW. Pure, so it is unit-tested.
 
-    Returns (problem, message). problem=True means UIPI will block our input.
-    """
-    if is_admin():
-        return False, ""
-    pid = _get_foreground_window_pid()
-    if not pid:
-        return False, ""
+    --elevate is stripped and --elevated is appended: the new copy knows it already tried."""
+    clean = [a for a in args if a not in (ELEVATE_FLAG, ELEVATED_FLAG)]
+    clean.append(ELEVATED_FLAG)
+    if frozen:                                   # PyInstaller exe: the exe is the program
+        return executable, subprocess.list2cmdline(clean)
+    return executable, subprocess.list2cmdline([script, *clean])
+
+
+def relaunch_as_admin(args: Sequence[str]) -> bool:
+    """Ask Windows for a UAC prompt and start an elevated copy.
+
+    True  = the request was accepted (user clicked Yes). Caller should exit this copy.
+    False = not Windows, or user declined UAC, or it failed. Caller keeps running normally."""
+    if os.name != "nt":
+        return False
+    from ctypes import wintypes
+    file, params = build_relaunch(args, frozen=bool(getattr(sys, "frozen", False)),
+                                  executable=sys.executable,
+                                  script=os.path.abspath(sys.argv[0]))
+    shell32 = ctypes.WinDLL("shell32", use_last_error=True)
+    shell32.ShellExecuteW.argtypes = (wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                                      wintypes.LPCWSTR, wintypes.LPCWSTR, ctypes.c_int)
+    shell32.ShellExecuteW.restype = wintypes.HINSTANCE
+    rc = shell32.ShellExecuteW(None, "runas", file, params, os.getcwd(), SW_SHOWNORMAL)
+    ok = int(rc or 0) > 32                       # <= 32 is an error code (5 = user said No)
+    if not ok:
+        log.warning("elevation request not accepted (ShellExecute code %s)", int(rc or 0))
+    return ok
+
+
+# ------------------------------------------------------------------ is that process elevated
+def classify_probe(open_err: int, token_err: int, elevated: Optional[bool]) -> str:
+    """Pure decision table for the Win32 probe results (0 = that step succeeded).
+
+    ACCESS_DENIED while opening a same-session app's process or token means it runs at a higher
+    privilege than us. That is a heuristic (a protected system process also denies), but a
+    foreground window we cannot inspect is exactly one we probably cannot type into."""
+    if open_err:
+        return LIKELY_ELEVATED if open_err == ERROR_ACCESS_DENIED else UNKNOWN
+    if token_err:
+        return LIKELY_ELEVATED if token_err == ERROR_ACCESS_DENIED else UNKNOWN
+    if elevated is None:
+        return UNKNOWN
+    return ELEVATED if elevated else NORMAL
+
+
+def uipi_blocked(self_admin: bool, target_state: str) -> bool:
+    """True when our injected input will silently be dropped."""
+    return (not self_admin) and target_state in (ELEVATED, LIKELY_ELEVATED)
+
+
+_api: Optional[tuple] = None
+
+
+def _win_api():
+    """Private WinDLL handles, so we never change argtypes on the shared ctypes.windll objects."""
+    global _api
+    if _api is None:
+        from ctypes import wintypes
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        adv = ctypes.WinDLL("advapi32", use_last_error=True)
+        k32.OpenProcess.argtypes = (wintypes.DWORD, wintypes.BOOL, wintypes.DWORD)
+        k32.OpenProcess.restype = wintypes.HANDLE
+        k32.CloseHandle.argtypes = (wintypes.HANDLE,)
+        k32.CloseHandle.restype = wintypes.BOOL
+        adv.OpenProcessToken.argtypes = (wintypes.HANDLE, wintypes.DWORD,
+                                         ctypes.POINTER(wintypes.HANDLE))
+        adv.OpenProcessToken.restype = wintypes.BOOL
+        adv.GetTokenInformation.argtypes = (wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID,
+                                            wintypes.DWORD, ctypes.POINTER(wintypes.DWORD))
+        adv.GetTokenInformation.restype = wintypes.BOOL
+        _api = (k32, adv, wintypes)
+    return _api
+
+
+def _probe_windows(pid: int) -> tuple[int, int, Optional[bool]]:
+    """(open_err, token_err, token_is_elevated). Raw Win32; see classify_probe for the logic."""
+    k32, adv, wintypes = _win_api()
+    ctypes.set_last_error(0)
+    proc = k32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, pid)
+    if not proc:
+        return ctypes.get_last_error() or UNKNOWN_ERR, 0, None
     try:
-        if is_pid_elevated(pid):
-            msg = (
-                "Target app is elevated: input will be ignored (UIPI). "
-                "Restart OmniControl as administrator."
-            )
-            log.warning(msg)
-            return True, msg
+        tok = wintypes.HANDLE()
+        ctypes.set_last_error(0)
+        if not adv.OpenProcessToken(proc, TOKEN_QUERY, ctypes.byref(tok)):
+            return 0, ctypes.get_last_error() or UNKNOWN_ERR, None
+        try:
+            info, size = TOKEN_ELEVATION(), wintypes.DWORD()
+            ok = adv.GetTokenInformation(tok, TOKEN_INFO_ELEVATION, ctypes.byref(info),
+                                         ctypes.sizeof(info), ctypes.byref(size))
+            return 0, 0, (bool(info.TokenIsElevated) if ok else None)
+        finally:
+            k32.CloseHandle(tok)
+    finally:
+        k32.CloseHandle(proc)
+
+
+
+def process_elevation(pid: int) -> str:
+    if os.name != "nt" or not pid:
+        return UNKNOWN
+    try:
+        return classify_probe(*_probe_windows(pid))
     except Exception:
-        log.exception("foreground elevation check failed")
-    return False, ""
+        log.exception("elevation probe failed for pid %s", pid)
+        return UNKNOWN
 
 
-def ensure_admin(force: bool = True) -> bool:
-    """Re-launch with 'runas' elevation if not already admin and force=True.
+# ------------------------------------------------------------------ foreground monitor
+@dataclass(frozen=True)
+class ForegroundInfo:
+    pid: int
+    state: str
+    blocked: bool          # True = our input is being dropped by UIPI right now
 
-    Returns True  → caller should sys.exit(0) immediately (new elevated copy is starting).
-    Returns False → already admin, user declined UAC, force=False, or non-Windows.
 
-    If the user clicks "No" on the UAC prompt, ShellExecuteW returns <= 32 and we
-    continue non-elevated with a clear logged warning — we never retry in a loop.
-    """
-    if is_admin():
-        return False
-    if not force or os.name != "nt":
-        log.warning(
-            "Not running as admin. Input to elevated apps will be ignored (UIPI). "
-            "Restart OmniControl as administrator to fix this."
-        )
-        return False
+class ElevationMonitor:
+    """Call update(pid) every tick with the foreground pid. It probes only when the pid changes
+    and returns the new ForegroundInfo then, otherwise None (cheap enough for a 60 Hz loop)."""
 
-    exe = sys.executable
-    # Reconstruct argv so the relaunched copy gets the same flags
-    args = " ".join(
-        f'"{a}"' if (" " in a or not a) else a
-        for a in sys.argv
-    )
+    def __init__(self, self_admin: Optional[bool] = None,
+                 probe: Optional[Callable[[int], str]] = None) -> None:
+        self.self_admin = is_admin() if self_admin is None else self_admin
+        self._probe = probe or process_elevation
+        self._pid = 0
+        self.info = ForegroundInfo(0, UNKNOWN, False)
 
-    log.info("Requesting elevation via UAC (ShellExecuteW runas) ...")
-    result = _shell_execute_w(None, "runas", exe, args, None, 1)
-
-    if result > 32:
-        log.info("Elevated process launched (hInstance=%d); exiting non-elevated copy.", result)
-        return True  # caller must exit
-
-    # User declined or error (e.g. result == 5 = ERROR_ACCESS_DENIED)
-    log.warning(
-        "UAC elevation declined or failed (ShellExecuteW=%d). "
-        "Continuing non-elevated — input to elevated apps will be ignored (UIPI).",
-        result,
-    )
-    return False
-
+    def update(self, pid: int) -> Optional[ForegroundInfo]:
+        if not pid or pid == self._pid:
+            return None
+        self._pid = pid
+        state = self._probe(pid)
+        self.info = ForegroundInfo(pid, state, uipi_blocked(self.self_admin, state))
+        return self.info

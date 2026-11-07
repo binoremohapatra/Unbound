@@ -38,9 +38,10 @@ py-modules = [
     "elevation",
     "doctor",
     "config",
-    "session_guard",
+    "single_instance",
+    "logsetup",
+    "version",
     "tray",
-    "logging_setup",
 ]
 packages = ["core", "adapters"]
 

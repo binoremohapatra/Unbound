@@ -15,9 +15,18 @@ import pytest
 
 from adapters.replay import Recorder, ReplaySource
 from core.events import Intent, OutputCommand, SignalEvent
-from gateway import (INPUT, KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, Gateway,
-                     MOUSEEVENTF_MOVE, RecordingBackend, build_key_input,
-                     build_mouse_button_input, build_mouse_move_input)
+from gateway import (
+    INPUT,
+    KEYEVENTF_EXTENDEDKEY,
+    KEYEVENTF_KEYUP,
+    KEYEVENTF_SCANCODE,
+    MOUSEEVENTF_MOVE,
+    Gateway,
+    RecordingBackend,
+    build_key_input,
+    build_mouse_button_input,
+    build_mouse_move_input,
+)
 from main import BasicMapper, DefaultProducer, Engine
 from state_machine import SMConfig, State, StateMachine
 from watchdog import LatencyLog, Watchdog
@@ -142,7 +151,39 @@ def test_cancel_event_is_consumed_only_while_latched():
     assert consumed is False                                   # nothing held: producers may use it
     sm.gate([Intent("hold", "fire", ms=1000)], 0.0)
     out, consumed = sm.on_event(ev("pop"), 0.1)
-    assert consumed is True and out == [Intent("release", "fire")]
+    assert consumed is True and out == [Intent("cancel_all")]  # empties mapper-held toggles too
+
+
+def test_cancel_events_list_is_configurable():
+    sm = StateMachine(SMConfig(cancel_events=("pop",)))
+    sm.gate([Intent("hold", "fire", ms=1000)], 0.0)
+    out, consumed = sm.on_event(ev("voice_stop"), 0.1)          # removed from the list
+    assert not consumed and out == [] and sm.state == State.LATCHED
+    out, consumed = sm.on_event(ev("pop"), 0.2)
+    assert consumed and sm.state == State.ACTIVE
+
+
+def test_latch_cancel_also_releases_non_latch_toggles():
+    """Regression (fuzz seed 153/192): pop/voice_stop used to release only sm-tracked latches,
+    so a mapper-held action toggle (interact) survived the cancel."""
+    eng, backend, sm, gw = make_engine()
+    run(eng, {0: [ev("brow_raise", 0.9)]}, 1)                     # interact toggle ON (key e)
+    assert backend.keys == {"e"}
+    run(eng, {0: [ev("jaw_open", 0.9)]}, 2, t0=100.1)             # fire latch
+    assert gw.held
+    run(eng, {0: [ev("pop")]}, 1, t0=100.5)
+    assert not gw.held and not backend.keys and not backend.mouse
+
+
+def test_context_change_tick_emits_no_new_holds():
+    """Regression (fuzz seed 27): on a cancel tick the producers are skipped, so a gesture
+    already in progress cannot re-press on the same tick the release went out."""
+    eng, backend, sm, gw = make_engine()
+    eng.step([], 100.0, context="game.exe")
+    run(eng, {0: [ev("jaw_open", 0.9)]}, 2, t0=100.1)             # fire latch
+    assert gw.held
+    eng.step([ev("jaw_open", 0.9, 100.2)], 100.2, context="chrome.exe")   # Alt+Tab mid-hold
+    assert not gw.held
 
 
 def test_cancel_keeps_head_aim_alive():
@@ -232,7 +273,7 @@ def test_cruise_toggle_persists_then_stop_cancels():
     assert sm.state == State.LATCHED
     assert sm.tick(60.0) == []                                 # no expiry
     out, consumed = sm.on_event(ev("voice_stop"), 61.0)
-    assert consumed and out == [Intent("release", "cruise")] and sm.state == State.ACTIVE
+    assert consumed and out == [Intent("cancel_all")] and sm.state == State.ACTIVE
 
 
 def test_cruise_toggle_off_clears_tracking():
@@ -433,6 +474,22 @@ def test_broken_producer_does_not_kill_the_tick():
     eng = Engine(StateMachine(), BasicMapper(), Gateway(backend), [Boom(), DefaultProducer()])
     eng.step([ev("jaw_open", 0.9, 1.0)], 1.0)
     assert backend.mouse                                        # healthy producer still worked
+
+
+def test_runaway_producer_trips_rate_limiter_and_locks():
+    class Runaway:
+        def process(self, events, now):
+            return [Intent("action", f"spam{i}") for i in range(200)]
+
+    eng, backend, sm, gw = make_engine()
+    eng.producers = [Runaway(), DefaultProducer()]
+    t = 0.0
+    for i in range(30):                               # 200*30 = 6000 intents >> 600/s limit
+        eng.step([], t + i * DT)
+    assert sm.state == State.CONVERSE_LOCK and eng.rate_trips >= 1
+    assert not gw.held
+    eng.step([], t + 31 * DT)
+    assert sm.state == State.CONVERSE_LOCK           # stays locked until an explicit resume
 
 
 def test_listener_exception_does_not_break_state_machine():

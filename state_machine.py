@@ -224,10 +224,11 @@ class StateMachine:
         return [Intent("resume")]
 
     def _cancel_latches(self, why: str) -> list[Intent]:
-        out = [Intent("release", n) for n in self._latches]
+        # cancel_all, not per-name releases: the mapper may hold things the state machine does
+        # not track as latches (e.g. action toggles). A safety cancel must empty the gateway.
         self._latches.clear()
         self._reason = why
-        return out
+        return [Intent("cancel_all")]
 
     def _refresh(self, now: float, reason: Optional[str]) -> None:
         if reason:

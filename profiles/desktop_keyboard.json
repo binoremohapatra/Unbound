@@ -1,0 +1,46 @@
+{
+  "game": "DesktopKeyboard",
+  "output": "keyboard",
+  "layers": {
+    "main": {
+      "stick": {
+        "left_key": "left",
+        "right_key": "right",
+        "threshold": 0.5
+      },
+      "actions": {
+        "jaw_open": {
+          "key": "space",
+          "cooldown_ms": 300
+        },
+        "brow_raise": {
+          "key": "enter",
+          "cooldown_ms": 300
+        },
+        "switch": {
+          "key": "tab",
+          "cooldown_ms": 300
+        },
+        "sprint": {
+          "key": "shift",
+          "mode": "hold"
+        }
+      },
+      "cancel": [
+        "pop",
+        "brow_hard"
+      ]
+    }
+  },
+  "assist": {
+    "hold_ms": 1500,
+    "min_ms": 500,
+    "max_ms": 3000
+  },
+  "flags": {
+    "talk_lock": true,
+    "glasses_fallback": true,
+    "assist": true
+  }
+}
+

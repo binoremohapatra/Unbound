@@ -241,6 +241,178 @@ OmniControl integrates cleanly with all Unbound modules via decoupled `importlib
 
 ---
 
+## 🗺️ Mapping & Profile System (Dishti's Slice)
+
+This section covers everything in Dishti's ownership:  
+`core/mapping.py`, `core/profile.py`, `profiles/*.json`, `adapters/switch.py`, `adapters/audio.py`, `try_mapping.py`.
+
+---
+
+### Profile JSON Format
+
+Profiles live in `profiles/` and control every aspect of the mapping engine.
+
+```jsonc
+{
+  "game": "supertuxkart",
+  "output": "gamepad",           // "gamepad" | "keyboard" — never both
+  "layers": {
+    "drive": {
+      "auto_throttle": 0.8,     // axis value sent on layer entry (gamepad only)
+      "stick": { "x_axis": "left_x", "y_axis": "left_y" },
+      "actions": {
+        "jaw_open": {
+          "button": "A",         // "button" for gamepad, "key" for keyboard
+          "mode": "tap",         // "tap" | "hold" | "toggle"
+          "cooldown_ms": 400
+        },
+        "brow_raise": { "button": "B", "mode": "toggle", "cooldown_ms": 300 },
+        "blink_long":  { "button": "LB", "mode": "hold",  "cooldown_ms": 200 }
+      },
+      "cancel": ["pop", "brow_hard"]   // intents that trigger cancel_all
+    },
+    "menu": { "actions": { "jaw_open": { "button": "A", "cooldown_ms": 300 } } }
+  },
+  "assist": { "hold_ms": 2000, "min_ms": 500, "max_ms": 3000 },
+  "flags": { "talk_lock": true, "glasses_fallback": true, "assist": true }
+}
+```
+
+**Accepted gateway names**
+
+| Output | Accepted values |
+|---|---|
+| `button` (gamepad) | `A B X Y LB RB LT RT START BACK L3 R3 DPAD_UP DPAD_DOWN DPAD_LEFT DPAD_RIGHT` |
+| `axis` (gamepad stick) | `left_x  left_y  right_x  right_y` |
+| `key` (keyboard) | lowercase letters, digits `0-9`, `esc tab enter space backspace shift ctrl alt up down left right home end pgup pgdn insert delete f1`–`f10` |
+
+---
+
+### Loading a Profile in Code
+
+```python
+from core.profile import load_profile, DEFAULT_PROFILE
+
+profile, errors = load_profile("profiles/supertuxkart.json")
+if errors:
+    print("Validation problems:", errors)   # falls back to DEFAULT_PROFILE
+```
+
+`load_profile` **never raises during play** — a bad file or schema error returns the
+safe `DEFAULT_PROFILE` and a list of human-readable messages.
+
+---
+
+### Using the Mapper
+
+```python
+from core.events import Intent
+from core.mapping import Mapper
+
+mapper = Mapper(profile)
+commands = mapper.start()          # emit auto_throttle axis if profile uses it
+
+# Every 60 Hz tick in main.py:
+commands = mapper.handle(intent, now=time.monotonic())   # Intent → [OutputCommand]
+commands = mapper.tick(now)        # release expired holds / queued state changes
+```
+
+**Behaviour by action mode**
+
+| mode | `action` intent | `hold`/`release` intent |
+|---|---|---|
+| `tap` | press + immediate release | — |
+| `hold` | hold until a `release` intent | press on `hold`, release on `release` |
+| `toggle` | flip on/off | — |
+
+**Special intents**
+
+| Intent kind | Mapper behaviour |
+|---|---|
+| `layer <name>` | `release_all`, clear held/toggled/cooldowns, switch layer, re-emit auto_throttle |
+| `cancel_all` | same as layer switch (without changing layer) |
+| `pause` | same + ignore all intents except `resume` |
+| `resume` | resume normal operation |
+| `stick x y` | gamepad → axis commands; keyboard → edge-detected direction keys past 0.5 threshold |
+
+---
+
+### `try_mapping.py` — Interactive Tester
+
+No camera, no game. Type intents in a REPL and see exactly what
+`OutputCommand`s the gateway would receive.
+
+```bash
+python try_mapping.py profiles/supertuxkart.json
+```
+
+```
+✓  Loaded: profiles/supertuxkart.json  (output=gamepad)
+  layers: ['drive', 'menu']
+  actions in 'drive': ['jaw_open', 'brow_raise', 'blink_long']
+  Type 'help' for commands, 'quit' to exit.
+
+intent> jaw_open
+  → OutputCommand(kind='button', name='A', pressed=True, value=0.0)
+  → OutputCommand(kind='button', name='A', pressed=False, value=0.0)
+intent> stick 0.7 -0.3
+  → OutputCommand(kind='axis', name='left_x', pressed=None, value=0.7)
+  → OutputCommand(kind='axis', name='left_y', pressed=None, value=-0.3)
+intent> layer menu
+  → OutputCommand(kind='release_all', name='', pressed=None, value=0.0)
+intent> quit
+```
+
+Available commands: `<action_name>`, `hold <name>`, `release <name>`,
+`stick <x> [y]`, `layer <name>`, `cancel`, `pause`, `resume`, `tick`,
+`layers`, `actions`, `profile`, `help`, `quit`.
+
+---
+
+### Switch Adapter
+
+The switch adapter turns a keyboard key (or real adaptive switch) into a
+`SignalEvent(src="switch", …)` for the main polling loop.
+
+```python
+from adapters.switch import SwitchSource
+
+# Hardware-free test: inject events directly
+src = SwitchSource(monitored_keys=["space"])
+src.inject("space", pressed=True, t=1.0)
+events = src.poll(now=1.0)   # → [SignalEvent(src='switch', name='space', value=1.0, t=1.0)]
+
+# Production: set env var OMNICONTROL_SWITCH=1 so create_source() succeeds
+# from adapters.switch import create_source
+# src = create_source(monitored_keys=["space"])
+```
+
+---
+
+### Audio Pop Detector
+
+Detects a short loud mouth-pop or tongue-click from raw 16-bit LE mono PCM.
+
+```python
+from adapters.audio import AudioSource, create_source
+
+# Inject synthetic audio (tests / dry-run):
+src = AudioSource(audio_fn=lambda: get_pcm_chunk())
+
+# Real mic (requires sounddevice + a microphone):
+# src = create_source()
+
+events = src.poll(now=time.monotonic())
+# → [SignalEvent(src='mic', name='pop', value=1.0, t=...)]
+```
+
+**Algorithm**: RMS > 0.08 AND peak/RMS > 3.5 (impulsive crest) → pop detected.  
+**Refractory period**: 300 ms cooldown after each pop — one physical pop → one event.  
+**Vosk voice commands**: off by default; enable with `AudioSource(enable_vosk=True)`.  
+No threads. `main.py`'s 60 Hz loop calls `poll()` every tick.
+
+---
+
 ## 📄 License
 
 This project is licensed under the **MIT License** — see the [LICENSE](LICENSE) file for details. Built with pride for accessibility and open-source gaming.

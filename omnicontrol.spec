@@ -19,7 +19,7 @@ import os
 import sys
 from pathlib import Path
 
-from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs
+from PyInstaller.utils.hooks import collect_data_files, collect_dynamic_libs, collect_submodules
 
 ROOT = Path(SPECPATH)                                  # noqa: F821  (provided by PyInstaller)
 APP_NAME = "OmniControl"
@@ -32,11 +32,18 @@ CANDIDATE_MODULES = [
 hiddenimports = [m for m in CANDIDATE_MODULES if (ROOT / (m.replace(".", "/") + ".py")).exists()]
 if sys.platform == "win32":
     hiddenimports.append("pystray._win32")                        # backend chosen at run time
+if (ROOT / "handsfree").is_dir():                                # teammates' package, loaded by name
+    hiddenimports += collect_submodules("handsfree")
 
 datas, binaries = [], []
 for folder in ("profiles", "assets"):                             # read-only files shipped with the app
     if (ROOT / folder).is_dir():
         datas.append((str(ROOT / folder), folder))
+if (ROOT / "handsfree" / "profiles").is_dir():
+    datas.append((str(ROOT / "handsfree" / "profiles"), "handsfree/profiles"))
+if (ROOT / "handsfree" / "dashboard" / "static").is_dir():
+    datas.append((str(ROOT / "handsfree" / "dashboard" / "static"),
+                  "handsfree/dashboard/static"))
 for pkg in ("mediapipe",):                                        # needs its model files at run time
     if importlib.util.find_spec(pkg) is not None and pkg not in os.environ.get("OMNICONTROL_EXCLUDE", ""):
         datas += collect_data_files(pkg)

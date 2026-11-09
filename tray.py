@@ -44,6 +44,8 @@ MAX_TOOLTIP = 127                      # Windows NOTIFYICONDATA.szTip holds 127 
 # ------------------------------------------------------------------ pure: tooltip and menu
 def tooltip(status: dict) -> str:
     parts = [f"OmniControl: {status.get('state', 'starting')}"]
+    if status.get("mock_sources"):
+        parts.append("MOCK INPUT: not real camera/mic")
     if status.get("latched"):
         parts.append("holding " + ", ".join(status["latched"]))
     if status.get("input_blocked"):

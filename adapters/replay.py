@@ -35,6 +35,9 @@ class ReplaySource:
         self._i = 0
         self._t0 = self._events[0].t if self._events else 0.0
         self._base: Optional[float] = None
+        self.name = "replay"
+        self.is_mock = True                     # a recording is simulated input, never real
+        self.mock_reason = "replay file"
 
     @property
     def finished(self) -> bool:

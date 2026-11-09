@@ -225,6 +225,8 @@ class Gateway:
                     (self._want_keys.add if c.pressed else self._want_keys.discard)(c.name)
                 elif c.kind == "button":
                     tgt = self.button_map.get(c.name)
+                    if tgt is None and c.name in MOUSE_FLAGS:
+                        tgt = ("mouse", c.name)      # bare mouse button name passes straight through
                     if tgt is None:
                         self._warn_once(f"button {c.name}", "unmapped button %r", c.name)
                     elif tgt[0] == "key":

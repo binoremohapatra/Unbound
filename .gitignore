@@ -72,3 +72,15 @@ ehthumbs.db
 Desktop.ini
 $RECYCLE.BIN/
 .DS_Store
+
+# Runtime artifacts
+logs/
+*.log
+soak.csv
+rec.jsonl
+*.zip
+
+# ML models (download at runtime / on the demo laptop, never commit)
+*.task
+*.onnx
+vosk-model*/

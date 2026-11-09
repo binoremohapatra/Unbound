@@ -37,6 +37,7 @@ log = logging.getLogger("omnicontrol.config")
 APP_DIR_NAME = "OmniControl"
 HARD_MAX_HOLD_MS = 10_000
 LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR")
+CANCEL_EVENT_NAMES = ("pop", "hard_blink", "voice_cancel", "voice_stop")
 _PROFILE_RE = re.compile(r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,63}$")   # no slashes: mapping builds a path
 
 
@@ -81,6 +82,8 @@ class AppConfig:
     default_hold_ms: int = 1800
     max_hold_ms: int = 10_000
     face_regain_ms: int = 300
+    watchdog_ms: int = 250             # main-loop deadman timeout (watchdog channel "loop")
+    cancel_events: tuple = CANCEL_EVENT_NAMES   # events that cancel a latch while one is held
     button_map: Mapping[str, tuple] = field(default_factory=dict)   # name -> (kind, target)
     axis_tuning: Mapping[str, Mapping] = field(default_factory=dict)  # axis -> {speed|invert|threshold}
 
@@ -180,6 +183,17 @@ def parse_config(data: Any, base: Optional[AppConfig] = None) -> tuple[AppConfig
                 vals[key] = _num(raw, 500, HARD_MAX_HOLD_MS, key, warns, True)
             elif key == "face_regain_ms":
                 vals[key] = _num(raw, 100, 2000, key, warns, True)
+            elif key == "watchdog_ms":
+                vals[key] = _num(raw, 100, 2000, key, warns, True)
+            elif key == "cancel_events":
+                if not isinstance(raw, list):
+                    raise ValueError("must be a list like [\"pop\", \"hard_blink\"]")
+                good = [e for e in raw if isinstance(e, str) and e in CANCEL_EVENT_NAMES]
+                for e in raw:
+                    if e not in CANCEL_EVENT_NAMES:
+                        warns.append(f"cancel_events entry {e!r} ignored "
+                                     f"(allowed: {', '.join(CANCEL_EVENT_NAMES)})")
+                vals[key] = tuple(good)
             elif key == "button_map":
                 vals[key] = _button_map(raw, warns)
             elif key == "axis_tuning":
@@ -211,6 +225,8 @@ def default_config_text() -> str:
         "default_hold_ms": 1800,
         "max_hold_ms": 10000,
         "face_regain_ms": 300,
+        "watchdog_ms": 250,
+        "cancel_events": list(CANCEL_EVENT_NAMES),
         "_button_map_example": {"A": ["key", "space"]},
         "button_map": {},
         "_axis_tuning_example": {"right_x": {"speed": 900}, "left_x": {"threshold": 0.35}},

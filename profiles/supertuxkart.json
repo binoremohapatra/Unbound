@@ -1,0 +1,63 @@
+{
+  "game": "SuperTuxKart",
+  "output": "gamepad",
+  "layers": {
+    "drive": {
+      "stick": {
+        "x_axis": "left_x"
+      },
+      "auto_throttle": 0.8,
+      "actions": {
+        "jaw_open": {
+          "button": "X",
+          "cooldown_ms": 400
+        },
+        "brow_raise": {
+          "button": "Y",
+          "mode": "toggle",
+          "cooldown_ms": 400
+        },
+        "blink_long": {
+          "button": "B",
+          "mode": "hold",
+          "cooldown_ms": 400
+        }
+      },
+      "cancel": [
+        "pop",
+        "brow_hard"
+      ]
+    },
+    "menu": {
+      "actions": {
+        "jaw_open": {
+          "button": "A",
+          "cooldown_ms": 400
+        },
+        "brow_raise": {
+          "button": "DPAD_DOWN",
+          "cooldown_ms": 400
+        },
+        "blink_long": {
+          "button": "DPAD_UP",
+          "cooldown_ms": 400
+        }
+      },
+      "cancel": [
+        "pop",
+        "brow_hard"
+      ]
+    }
+  },
+  "assist": {
+    "hold_ms": 2000,
+    "min_ms": 500,
+    "max_ms": 3000
+  },
+  "flags": {
+    "talk_lock": true,
+    "glasses_fallback": true,
+    "assist": true
+  }
+}
+

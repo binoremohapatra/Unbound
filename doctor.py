@@ -39,6 +39,8 @@ DEPENDENCIES = (
     ("mediapipe", "mediapipe", "face and head tracking"),
     ("numpy", "numpy", "webcam and audio adapters"),
     ("sounddevice", "sounddevice", "microphone adapter"),
+    ("pyaudio", "pyaudio", "microphone adapter (handsfree)"),
+    ("keyboard", "keyboard", "switch adapter (handsfree)"),
     ("pystray", "pystray", "tray icon"),
     ("PIL", "pillow", "tray icon"),
 )
@@ -160,6 +162,47 @@ def check_privacy(kind: str, reader: Optional[Callable[[str, str, str], Optional
                      f"Settings > Privacy & security > {label}: turn on access, including "
                      f"'Let desktop apps access your {label.lower()}'")
     return Check(name, OK, f"{label} access is not blocked")
+
+
+def _camera_opens(index: int = 0) -> bool:
+    """Cheap probe: can OpenCV open the camera at all? Mirrors the fallback inside
+    handsfree.adapters.webcam (its file is not ours to change)."""
+    try:
+        import cv2
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
+        ok = cap.isOpened()
+        cap.release()
+        return ok
+    except Exception:
+        return False
+
+
+def check_mock_sources(slow: bool = True, allow_mock: bool = False,
+                       camera_probe: Optional[Callable[[], bool]] = None) -> Check:
+    """Would any live source run in mock/simulated mode? Mirrors the exact fallback
+    conditions in the teammates' handsfree adapters without importing their threads.
+    FAIL unless --allow-mock: fake pose/audio/switch data must never look like real input."""
+    mocks: list[str] = []
+    if importlib.util.find_spec("cv2") is None or importlib.util.find_spec("mediapipe") is None:
+        mocks.append("webcam (missing opencv-python or mediapipe)")
+    else:
+        probe = camera_probe or _camera_opens      # cheap isOpened probe, even in --quick
+        if not probe():
+            mocks.append("webcam (no camera opened at index 0)")
+    if importlib.util.find_spec("pyaudio") is None:
+        mocks.append("audio (missing pyaudio)")
+    if importlib.util.find_spec("keyboard") is None:
+        mocks.append("switch (missing keyboard)")
+    if not mocks:
+        return Check("mock input", OK, "all live sources would run on real hardware")
+    detail = "MOCK INPUT: not real camera/mic/switch - " + "; ".join(mocks)
+    if allow_mock:
+        return Check("mock input", WARN, detail + " (--allow-mock)",
+                     "Install the missing pieces for a real demo: pip install opencv-python "
+                     "mediapipe pyaudio keyboard, and check the camera is free")
+    return Check("mock input", FAIL, detail,
+                 "Install the missing pieces and free the camera, or pass --allow-mock "
+                 "to acknowledge simulated input")
 
 
 # ------------------------------------------------------------------ devices
@@ -315,12 +358,13 @@ def check_loop_jitter(seconds: float = 1.5, hz: float = 60.0) -> Check:
 
 
 # ------------------------------------------------------------------ run + report
-def run_all(slow: bool = True) -> list[Check]:
+def run_all(slow: bool = True, allow_mock: bool = False) -> list[Check]:
     """slow=False skips the camera open and the 1.5 s jitter run (quick checks only)."""
     plan: list[tuple[str, Callable[[], Check]]] = [
         ("python", check_python), ("platform", check_platform), ("elevation", check_elevation),
         ("running instance", check_running_instance), ("folders", check_folders),
         ("dependencies", check_dependencies),
+        ("mock input", lambda: check_mock_sources(slow=slow, allow_mock=allow_mock)),
         ("webcam privacy", lambda: check_privacy("webcam")),
         ("microphone privacy", lambda: check_privacy("microphone")),
         ("sendinput", check_sendinput), ("display", check_display),
@@ -377,11 +421,11 @@ def show_message_box(title: str, text: str) -> None:
             log.exception("message box failed")
 
 
-def run_cli(as_json: bool = False, slow: bool = True) -> int:
+def run_cli(as_json: bool = False, slow: bool = True, allow_mock: bool = False) -> int:
     """Entry point for --doctor. Always saves doctor-report.txt in the log folder: a windowed exe
     started by double-click has no terminal, so it also shows the result in a message box."""
     attach_parent_console()
-    checks = run_all(slow)
+    checks = run_all(slow, allow_mock=allow_mock)
     text = json.dumps([asdict(c) for c in checks], indent=2) if as_json else format_report(checks)
     try:
         config.log_dir().mkdir(parents=True, exist_ok=True)

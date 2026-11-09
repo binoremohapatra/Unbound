@@ -117,7 +117,7 @@ def test_replay_is_exempt_from_the_single_instance_lock(session):
 def test_lock_is_taken_during_a_run_and_released_after_it():
     seen = {}
 
-    def spy_sources():                       # called while main() is running and holds the lock
+    def spy_sources(*a, **k):               # called while main() is running and holds the lock
         probe = single_instance.SingleInstance(app.SINGLE_INSTANCE_NAME)
         seen["free_during_run"] = probe.acquire()
         probe.release()
@@ -134,9 +134,13 @@ def test_lock_is_taken_during_a_run_and_released_after_it():
 
 
 def test_doctor_flag_returns_before_anything_else_starts(capsys):
-    assert app.main(["--doctor", "--quick"]) == 0
+    assert app.main(["--doctor", "--quick", "--allow-mock"]) == 0
     assert "doctor" in capsys.readouterr().out
     assert not cfgmod.config_path().exists()                   # no config, no logging, no engine
+    # without --allow-mock the same run FAILs (exit 1) on a machine that would feed mock input
+    code = app.main(["--doctor", "--quick"])
+    assert code in (0, 1)
+    assert not cfgmod.config_path().exists()
 
 
 def test_cli_profile_and_verbose_beat_the_config_file():

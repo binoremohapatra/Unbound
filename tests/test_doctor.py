@@ -150,9 +150,38 @@ def test_python_check_mentions_version_and_bits():
     assert "bit" in c.detail and c.status in (OK, WARN)
 
 
+# ---------------------------------------------------------------- mock input check
+def test_mock_sources_all_real_is_ok(monkeypatch):
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    c = doctor.check_mock_sources(camera_probe=lambda: True)
+    assert c.status == OK and "real hardware" in c.detail
+
+
+def test_mock_sources_missing_deps_fail_unless_allow_mock(monkeypatch):
+    def spec(name):
+        return None if name in ("mediapipe", "pyaudio", "keyboard") else object()
+    monkeypatch.setattr(importlib.util, "find_spec", spec)
+    c = doctor.check_mock_sources(camera_probe=lambda: True)
+    assert c.status == FAIL and "MOCK INPUT" in c.detail
+    assert "webcam" in c.detail and "audio" in c.detail and "switch" in c.detail
+    w = doctor.check_mock_sources(allow_mock=True, camera_probe=lambda: True)
+    assert w.status == WARN and "allow-mock" in w.detail
+
+
+def test_mock_sources_no_camera_is_mock_even_with_deps(monkeypatch):
+    monkeypatch.setattr(importlib.util, "find_spec", lambda name: object())
+    c = doctor.check_mock_sources(camera_probe=lambda: False)
+    assert c.status == FAIL and "no camera" in c.detail
+
+
+def test_run_all_includes_mock_input_check():
+    names = [c.name for c in doctor.run_all(slow=False)]
+    assert "mock input" in names
+
+
 # ---------------------------------------------------------------- CLI entry
 def test_run_cli_prints_and_saves_report(capsys):
-    code = doctor.run_cli(slow=False)
+    code = doctor.run_cli(slow=False, allow_mock=True)
     out = capsys.readouterr().out
     assert code == 0 and "OmniControl" in out and "doctor" in out
     saved = (doctor.config.log_dir() / "doctor-report.txt").read_text(encoding="utf-8")

@@ -135,3 +135,79 @@ def test_load_profile_valid_file(tmp_path):
     assert errs == []
     assert loaded["game"] == DEFAULT_PROFILE["game"]
 
+
+# --- Step 3: Safe fallback tests for malformed/missing/broken JSON ---
+
+
+def test_load_profile_missing_file_falls_back():
+    loaded, errs = load_profile("non_existent_profile_path_12345.json")
+    assert loaded == DEFAULT_PROFILE
+    assert len(errs) > 0
+    assert any("could not read" in e for e in errs)
+
+
+def test_load_profile_malformed_json_falls_back(tmp_path):
+    broken_file = tmp_path / "broken.json"
+    broken_file.write_text("{ unquoted_key: missing_closing_bracket", encoding="utf-8")
+    loaded, errs = load_profile(broken_file)
+    assert loaded == DEFAULT_PROFILE
+    assert len(errs) > 0
+    assert any("could not read" in e for e in errs)
+
+
+def test_load_profile_empty_file_falls_back(tmp_path):
+    empty_file = tmp_path / "empty.json"
+    empty_file.write_text("   \n  \t", encoding="utf-8")
+    loaded, errs = load_profile(empty_file)
+    assert loaded == DEFAULT_PROFILE
+    assert len(errs) > 0
+    assert any("could not read" in e for e in errs)
+
+
+def test_load_profile_non_dict_json_falls_back(tmp_path):
+    list_file = tmp_path / "list.json"
+    list_file.write_text("[1, 2, 3]", encoding="utf-8")
+    loaded, errs = load_profile(list_file)
+    assert loaded == DEFAULT_PROFILE
+    assert len(errs) > 0
+    assert any("must be a JSON object" in e for e in errs)
+
+
+def test_load_profile_schema_invalid_falls_back(tmp_path):
+    invalid_schema = tmp_path / "invalid_schema.json"
+    bad_data = {
+        "output": "gamepad",
+        "layers": {
+            "main": {
+                "actions": {
+                    "attack": {"button": "NON_EXISTENT_BUTTON"}
+                }
+            }
+        }
+    }
+    invalid_schema.write_text(json.dumps(bad_data), encoding="utf-8")
+    loaded, errs = load_profile(invalid_schema)
+    assert loaded == DEFAULT_PROFILE
+    assert len(errs) > 0
+    assert any("unknown gamepad button" in e for e in errs)
+
+
+def test_load_profile_directory_path_falls_back(tmp_path):
+    loaded, errs = load_profile(tmp_path)
+    assert loaded == DEFAULT_PROFILE
+    assert len(errs) > 0
+    assert any("could not read" in e for e in errs)
+
+
+def test_load_profile_fallback_is_deep_copy():
+    p1, _ = load_profile("missing_1.json")
+    p1["game"] = "mutated_game_name"
+    p1["layers"]["main"]["actions"]["new_action"] = {"button": "Y"}
+
+    p2, _ = load_profile("missing_2.json")
+    assert p2["game"] == "default"
+    assert "new_action" not in p2["layers"]["main"]["actions"]
+    assert DEFAULT_PROFILE["game"] == "default"
+    assert "new_action" not in DEFAULT_PROFILE["layers"]["main"]["actions"]
+
+

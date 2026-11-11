@@ -207,22 +207,43 @@ def check_mock_sources(slow: bool = True, allow_mock: bool = False,
 
 # ------------------------------------------------------------------ devices
 def _probe_camera_cv2(index: int = 0) -> Optional[dict]:
+    """Open the camera at 640x360 MJPG @30 fps (the bench-verified sweet spot); if that
+    resolution will not open, fall back to 640x480. Reports requested vs actual settings
+    plus a measured fps over ~15 frames."""
     import cv2
-    cap = cv2.VideoCapture(index, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
-    try:
-        if not cap.isOpened():
-            return None
-        got, t0 = 0, time.perf_counter()
-        for _ in range(15):
-            got += 1 if cap.read()[0] else 0
-        dt = max(1e-6, time.perf_counter() - t0)
-        return {"frames": got, "fps": got / dt,
-                "size": (int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)), int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)))}
-    finally:
-        cap.release()
+    fourcc = None
+    if hasattr(cv2, "VideoWriter_fourcc"):
+        fourcc = cv2.VideoWriter_fourcc(*"MJPG")
+    for w, h in ((640, 360), (640, 480)):
+        cap = cv2.VideoCapture(index, cv2.CAP_DSHOW if os.name == "nt" else cv2.CAP_ANY)
+        try:
+            if fourcc is not None:
+                cap.set(cv2.CAP_PROP_FOURCC, fourcc)
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, w)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, h)
+            cap.set(cv2.CAP_PROP_FPS, 30)
+            cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+            if not cap.isOpened():
+                continue
+            got, t0 = 0, time.perf_counter()
+            for _ in range(15):
+                got += 1 if cap.read()[0] else 0
+            dt = max(1e-6, time.perf_counter() - t0)
+            if got == 0:
+                continue                       # opened but delivers nothing: try next mode
+            aw = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            ah = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            return {"frames": got, "fps": got / dt,
+                    "size": (aw, ah), "requested": (w, h, "MJPG", 30)}
+        finally:
+            cap.release()
+    return None
 
 
-def check_camera(probe: Optional[Callable[[], Optional[dict]]] = None) -> Check:
+def check_camera(probe: Optional[Callable[[], Optional[dict]]] = None,
+                 cfg: Optional["config.AppConfig"] = None) -> Check:
+    if cfg is None:
+        cfg = config.AppConfig()
     if probe is None:
         if importlib.util.find_spec("cv2") is None:
             return Check("camera", SKIP, "OpenCV not installed, cannot open the camera from here")
@@ -232,13 +253,17 @@ def check_camera(probe: Optional[Callable[[], Optional[dict]]] = None) -> Check:
     if info is None:
         return Check("camera", FAIL, "no camera opened at index 0", fix_busy)
     w, h = info["size"]
-    detail = f"{w}x{h}, {info['fps']:.0f} fps measured, {info['frames']}/15 frames"
+    req = info.get("requested")
+    res_txt = f"{w}x{h}" + (f" (asked {req[0]}x{req[1]} {req[2]}@{req[3]}fps)" if req else "")
+    detail = f"{res_txt}, {info['fps']:.0f} fps measured, {info['frames']}/15 frames"
     if info["frames"] == 0:
         return Check("camera", FAIL, detail, fix_busy)
-    if info["fps"] < 20:
-        return Check("camera", WARN, detail,
-                     "Low frame rate adds latency. Improve lighting (cameras slow down in the dark) "
-                     "and turn off auto low-light in the camera app")
+    fps_fix = ("Low frame rate adds latency. Add light, turn off auto low-light in the camera "
+               "app, ask for MJPG (not YUY2), and use a USB 3 port")
+    if info["fps"] < cfg.camera_fps_fail_below:
+        return Check("camera", FAIL, detail, fps_fix)
+    if info["fps"] < cfg.camera_fps_pass:
+        return Check("camera", WARN, detail, fps_fix)
     return Check("camera", OK, detail)
 
 

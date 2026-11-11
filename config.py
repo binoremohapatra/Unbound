@@ -84,6 +84,8 @@ class AppConfig:
     face_regain_ms: int = 300
     watchdog_ms: int = 250             # main-loop deadman timeout (watchdog channel "loop")
     cancel_events: tuple = CANCEL_EVENT_NAMES   # events that cancel a latch while one is held
+    camera_fps_pass: float = 28.0       # doctor: measured camera fps at or above = OK
+    camera_fps_fail_below: float = 20.0 # doctor: measured camera fps below = FAIL (20-27.9 = WARN)
     button_map: Mapping[str, tuple] = field(default_factory=dict)   # name -> (kind, target)
     axis_tuning: Mapping[str, Mapping] = field(default_factory=dict)  # axis -> {speed|invert|threshold}
 
@@ -185,6 +187,10 @@ def parse_config(data: Any, base: Optional[AppConfig] = None) -> tuple[AppConfig
                 vals[key] = _num(raw, 100, 2000, key, warns, True)
             elif key == "watchdog_ms":
                 vals[key] = _num(raw, 100, 2000, key, warns, True)
+            elif key == "camera_fps_pass":
+                vals[key] = _num(raw, 5.0, 240.0, key, warns, False)
+            elif key == "camera_fps_fail_below":
+                vals[key] = _num(raw, 1.0, 120.0, key, warns, False)
             elif key == "cancel_events":
                 if not isinstance(raw, list):
                     raise ValueError("must be a list like [\"pop\", \"hard_blink\"]")
@@ -204,6 +210,10 @@ def parse_config(data: Any, base: Optional[AppConfig] = None) -> tuple[AppConfig
     if cfg.default_hold_ms > cfg.max_hold_ms:
         warns.append("default_hold_ms is above max_hold_ms, lowering it")
         cfg = AppConfig(**{**cfg.__dict__, "default_hold_ms": cfg.max_hold_ms})
+    if cfg.camera_fps_fail_below >= cfg.camera_fps_pass:
+        warns.append("camera_fps_fail_below must be below camera_fps_pass; raising the pass mark")
+        cfg = AppConfig(**{**cfg.__dict__,
+                           "camera_fps_pass": cfg.camera_fps_fail_below + 1.0})
     return cfg, warns
 
 
@@ -226,6 +236,8 @@ def default_config_text() -> str:
         "max_hold_ms": 10000,
         "face_regain_ms": 300,
         "watchdog_ms": 250,
+        "camera_fps_pass": 28.0,
+        "camera_fps_fail_below": 20.0,
         "cancel_events": list(CANCEL_EVENT_NAMES),
         "_button_map_example": {"A": ["key", "space"]},
         "button_map": {},

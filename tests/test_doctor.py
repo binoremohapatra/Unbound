@@ -95,13 +95,32 @@ def test_privacy_queries_the_right_registry_paths():
 
 
 # ---------------------------------------------------------------- devices (probes injected)
+def _cam(frames=15, fps=30.0, size=(640, 360), requested=(640, 360, "MJPG", 30)):
+    return {"frames": frames, "fps": fps, "size": size, "requested": requested}
+
+
 def test_camera_outcomes():
     assert doctor.check_camera(lambda: None).status == FAIL
-    assert doctor.check_camera(lambda: {"frames": 0, "fps": 0.0, "size": (640, 480)}).status == FAIL
-    low = doctor.check_camera(lambda: {"frames": 15, "fps": 9.0, "size": (640, 480)})
-    assert low.status == WARN and "lighting" in low.fix
-    good = doctor.check_camera(lambda: {"frames": 15, "fps": 30.0, "size": (1280, 720)})
+    assert doctor.check_camera(lambda: {"frames": 0, "fps": 0.0, "size": (640, 360)}).status == FAIL
+    slow = doctor.check_camera(lambda: _cam(fps=9.0))
+    assert slow.status == FAIL and "MJPG" in slow.fix          # < 20 fps is a hard fail now
+    mid = doctor.check_camera(lambda: _cam(fps=24.0))
+    assert mid.status == WARN                                   # 20-27.9 fps warns
+    good = doctor.check_camera(lambda: _cam(fps=30.0, size=(1280, 720)))
     assert good.status == OK and "1280x720" in good.detail
+
+
+def test_camera_reports_requested_vs_actual():
+    c = doctor.check_camera(lambda: _cam(size=(640, 480), requested=(640, 360, "MJPG", 30)))
+    assert "640x480" in c.detail and "asked 640x360 MJPG@30" in c.detail
+
+
+def test_camera_thresholds_come_from_config():
+    from config import AppConfig
+    cfg = AppConfig(camera_fps_pass=35.0, camera_fps_fail_below=30.0)
+    assert doctor.check_camera(lambda: _cam(fps=32.0), cfg).status == WARN
+    assert doctor.check_camera(lambda: _cam(fps=28.0), cfg).status == FAIL
+    assert doctor.check_camera(lambda: _cam(fps=40.0), cfg).status == OK
 
 
 def test_camera_skips_when_opencv_missing(monkeypatch):

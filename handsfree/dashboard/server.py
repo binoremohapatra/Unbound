@@ -6,9 +6,15 @@ import asyncio
 import json
 import logging
 from pathlib import Path
+import sys
 import threading
 import time
 from typing import Any, Dict, Optional, Set
+
+# Ensure project root (c:\Unbound) is on sys.path
+PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from handsfree.core.osk_engine import OnScreenKeyboardEngine, KEYBOARD_LAYOUT
 from handsfree.core.cursor_tracker import CursorTracker, DwellAction

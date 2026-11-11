@@ -228,7 +228,7 @@ class HandsfreeEngine:
                                 "action": dwell_status.action.value,
                                 "dragging": dwell_status.is_dragging,
                             })
-                            if dwell_status.state.value == "triggered" and not self.args.dry_run and os.name == "nt":
+                            if self.args.enable_dwell_click and dwell_status.state.value == "triggered" and not self.args.dry_run and os.name == "nt":
                                 try:
                                     import ctypes
                                     ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
@@ -307,6 +307,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--deadzone", type=float, default=2.5, help="Head pose deadzone in degrees (suppress micro-jitter)")
     parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True, help="Invert X axis for mirror webcam (default: True)")
     parser.add_argument("--enable-blink-click", action=argparse.BooleanOptionalAction, default=True, help="Enable double-blink left click (default: True)")
+    parser.add_argument("--enable-dwell-click", action="store_true", default=False, help="Enable automatic dwell click on hover stop (default: False)")
     return parser.parse_args()
 
 

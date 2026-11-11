@@ -362,44 +362,9 @@
       transform: scale(1.03);
     }
 
-    /* Floating Head Pointer Cursor */
-    .head-cursor, .head-cursor * {
-      pointer-events: none !important;
-    }
+    /* Floating Head Pointer Cursor (Hidden: native Windows cursor is used directly) */
     .head-cursor {
-      position: fixed;
-      top: 0;
-      left: 0;
-      width: 28px;
-      height: 28px;
-      margin-left: -14px;
-      margin-top: -14px;
-      border-radius: 50%;
-      background: rgba(56, 189, 248, 0.35);
-      border: 2px solid #38bdf8;
-      box-shadow: 0 0 14px rgba(56, 189, 248, 0.8);
-      pointer-events: none !important;
-      z-index: 999999;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      transition: transform 0.08s cubic-bezier(0.15, 0.85, 0.35, 1.0);
-    }
-
-    .head-cursor.blink-clicked {
-      transform: scale(1.4);
-      background: rgba(34, 197, 94, 0.6) !important;
-      border-color: #22c55e !important;
-      box-shadow: 0 0 22px rgba(34, 197, 94, 1.0) !important;
-    }
-
-    .head-cursor-dot {
-      width: 8px;
-      height: 8px;
-      border-radius: 50%;
-      background: #ffffff;
-      box-shadow: 0 0 6px #ffffff;
-      pointer-events: none !important;
+      display: none !important;
     }
 
     /* Action pills */
@@ -647,32 +612,36 @@
           keyEl.appendChild(textEl);
           keyEl.appendChild(fillEl);
 
-          // Click or Dwell trigger
+          // Click trigger (physical click or double-blink left click)
           keyEl.addEventListener('click', () => {
             sendWS({ type: "osk_key", key: key.label });
           });
 
-          // Mouse/Head dwell hover simulation
+          // Single clean dwell-hover on OSK keys
           let hoverTimer = null;
           let startTime = 0;
-          const DWELL_MS = 550;
+          let hasActuated = false;
+          const DWELL_MS = 600;
 
           keyEl.addEventListener('mouseenter', () => {
             startTime = performance.now();
+            hasActuated = false;
             sendWS({ type: "osk_hover", key: key.label });
 
             hoverTimer = setInterval(() => {
+              if (hasActuated) return;
               const elapsed = performance.now() - startTime;
               const prog = Math.min(1.0, elapsed / DWELL_MS);
               fillEl.style.height = `${prog * 100}%`;
 
               if (prog >= 1.0) {
+                hasActuated = true;
                 clearInterval(hoverTimer);
                 hoverTimer = null;
                 fillEl.style.height = '0%';
                 sendWS({ type: "osk_key", key: key.label });
               }
-            }, 30);
+            }, 25);
           });
 
           keyEl.addEventListener('mouseleave', () => {
@@ -681,6 +650,7 @@
               hoverTimer = null;
             }
             fillEl.style.height = '0%';
+            hasActuated = false;
             sendWS({ type: "osk_hover", key: null });
           });
 
@@ -692,70 +662,6 @@
     }
 
     renderKeyboard();
-
-    let headTarget = null;
-    let headHoverTimer = null;
-    let headHoverStart = 0;
-    const HEAD_DWELL_MS = 550;
-    let lastActuatedTarget = null;
-    let lastActuatedTime = 0;
-
-    function handleHeadPointerAt(x, y) {
-      const el = document.elementFromPoint(x, y);
-      const target = el ? el.closest('.osk-key, .predict-chip, .dwell-btn, .action-btn, #recenterBtn') : null;
-
-      // Cooldown after triggering a key so it doesn't immediately repeat
-      if (target && target === lastActuatedTarget && (performance.now() - lastActuatedTime) < 450) {
-        return;
-      }
-      if (target !== lastActuatedTarget) {
-        lastActuatedTarget = null;
-      }
-
-      if (target === headTarget) return;
-
-      if (headTarget) {
-        headTarget.classList.remove('head-hovered');
-        const prevFill = headTarget.querySelector('.dwell-fill-bar');
-        if (prevFill) prevFill.style.height = '0%';
-        if (headHoverTimer) {
-          clearInterval(headHoverTimer);
-          headHoverTimer = null;
-        }
-      }
-
-      headTarget = target;
-      if (!target) return;
-
-      target.classList.add('head-hovered');
-      headHoverStart = performance.now();
-      const fillEl = target.querySelector('.dwell-fill-bar');
-
-      headHoverTimer = setInterval(() => {
-        if (!headTarget) {
-          clearInterval(headHoverTimer);
-          headHoverTimer = null;
-          return;
-        }
-        const elapsed = performance.now() - headHoverStart;
-        const prog = Math.min(1.0, elapsed / HEAD_DWELL_MS);
-
-        if (fillEl) {
-          fillEl.style.height = `${prog * 100}%`;
-        }
-
-        if (prog >= 1.0) {
-          clearInterval(headHoverTimer);
-          headHoverTimer = null;
-          if (fillEl) fillEl.style.height = '0%';
-          lastActuatedTarget = headTarget;
-          lastActuatedTime = performance.now();
-          headTarget.click();
-          headTarget.classList.remove('head-hovered');
-          headTarget = null;
-        }
-      }, 25);
-    }
 
     function drawStick(x, y) {
       const cx = stickCanvas.width / 2;
@@ -847,23 +753,10 @@
           rollBar.style.width = `${Math.min(100, Math.abs(data.pose.roll) * 3)}%`;
         }
 
-        // Head Cursor Position & Hit-testing on Keyboard
-        if (data.cursor) {
-          const normX = data.cursor.norm_x !== undefined ? data.cursor.norm_x : (data.cursor.x / 1536);
-          const normY = data.cursor.norm_y !== undefined ? data.cursor.norm_y : (data.cursor.y / 864);
-          const px = Math.max(10, Math.min(window.innerWidth - 10, normX * window.innerWidth));
-          const py = Math.max(10, Math.min(window.innerHeight - 10, normY * window.innerHeight));
-
-          headCursor.style.display = 'flex';
-          headCursor.style.transform = `translate(${px}px, ${py}px)`;
-
-          handleHeadPointerAt(px, py);
-        }
-
         // Double-blink click visual trigger
         if (data.blink_click) {
-          headCursor.classList.add('blink-clicked');
-          setTimeout(() => headCursor.classList.remove('blink-clicked'), 300);
+          statusDot.style.boxShadow = '0 0 16px #22c55e';
+          setTimeout(() => { statusDot.style.boxShadow = ''; }, 300);
         }
 
         // Tracky Mouse Dwell progress

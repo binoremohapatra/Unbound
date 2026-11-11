@@ -363,6 +363,9 @@
     }
 
     /* Floating Head Pointer Cursor */
+    .head-cursor, .head-cursor * {
+      pointer-events: none !important;
+    }
     .head-cursor {
       position: fixed;
       top: 0;
@@ -375,7 +378,7 @@
       background: rgba(56, 189, 248, 0.35);
       border: 2px solid #38bdf8;
       box-shadow: 0 0 14px rgba(56, 189, 248, 0.8);
-      pointer-events: none;
+      pointer-events: none !important;
       z-index: 999999;
       display: flex;
       align-items: center;
@@ -389,6 +392,7 @@
       border-radius: 50%;
       background: #ffffff;
       box-shadow: 0 0 6px #ffffff;
+      pointer-events: none !important;
     }
 
     /* Action pills */
@@ -686,10 +690,20 @@
     let headHoverTimer = null;
     let headHoverStart = 0;
     const HEAD_DWELL_MS = 550;
+    let lastActuatedTarget = null;
+    let lastActuatedTime = 0;
 
     function handleHeadPointerAt(x, y) {
       const el = document.elementFromPoint(x, y);
       const target = el ? el.closest('.osk-key, .predict-chip, .dwell-btn, .action-btn, #recenterBtn') : null;
+
+      // Cooldown after triggering a key so it doesn't immediately repeat
+      if (target && target === lastActuatedTarget && (performance.now() - lastActuatedTime) < 450) {
+        return;
+      }
+      if (target !== lastActuatedTarget) {
+        lastActuatedTarget = null;
+      }
 
       if (target === headTarget) return;
 
@@ -727,6 +741,8 @@
           clearInterval(headHoverTimer);
           headHoverTimer = null;
           if (fillEl) fillEl.style.height = '0%';
+          lastActuatedTarget = headTarget;
+          lastActuatedTime = performance.now();
           headTarget.click();
           headTarget.classList.remove('head-hovered');
           headTarget = null;
@@ -781,6 +797,12 @@
 
     recenterBtn.addEventListener('click', () => {
       sendWS({ type: "recenter", yaw: currentPose.yaw, pitch: currentPose.pitch });
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if (e.key === 'c' || e.key === 'C') {
+        recenterBtn.click();
+      }
     });
 
     function connect() {

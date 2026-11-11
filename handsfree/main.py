@@ -73,10 +73,20 @@ class HandsfreeEngine:
         self.mapper = ProfileMapper.from_file(profile_path)
         logger.info(f"Loaded controller profile: '{self.mapper.name}'")
 
-        # 6. Dashboard Server
+        # 6. Dashboard Server & Head Cursor Tracker
         self.dashboard = None
         if not args.no_dashboard:
-            self.dashboard = DashboardServer(host=args.dashboard_host, port=args.dashboard_port)
+            tracker = CursorTracker(
+                angle_range_x=args.angle_range_x,
+                angle_range_y=args.angle_range_y,
+                deadzone_deg=args.deadzone,
+                auto_calibrate=True,
+            )
+            self.dashboard = DashboardServer(
+                host=args.dashboard_host,
+                port=args.dashboard_port,
+                cursor_tracker=tracker,
+            )
 
         # 7. Adapters
         self.adapters = []
@@ -269,6 +279,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dashboard-host", type=str, default="127.0.0.1", help="Dashboard host IP")
     parser.add_argument("--dashboard-port", type=int, default=8080, help="Dashboard port")
     parser.add_argument("--watchdog-timeout", type=float, default=0.75, help="Safety heartbeat timeout in seconds")
+    parser.add_argument("--angle-range-x", type=float, default=12.0, help="Head yaw degrees for full screen width (smaller=more sensitive)")
+    parser.add_argument("--angle-range-y", type=float, default=9.0, help="Head pitch degrees for full screen height (smaller=more sensitive)")
+    parser.add_argument("--deadzone", type=float, default=2.0, help="Head pose deadzone in degrees (suppress micro-jitter)")
     return parser.parse_args()
 
 

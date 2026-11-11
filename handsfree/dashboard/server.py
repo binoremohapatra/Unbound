@@ -37,7 +37,12 @@ class DashboardServer:
     including OptiKey On-Screen Keyboard and Tracky-Mouse dwell clicking.
     """
 
-    def __init__(self, host: str = "127.0.0.1", port: int = 8080):
+    def __init__(
+        self,
+        host: str = "127.0.0.1",
+        port: int = 8080,
+        cursor_tracker: Optional[CursorTracker] = None,
+    ):
         self.host = host
         self.port = port
         self.active_connections: Set[WebSocket] = set()
@@ -47,7 +52,7 @@ class DashboardServer:
             on_text_updated=self._on_osk_text_changed,
             on_key_actuated=self._on_osk_key_actuated,
         )
-        self.cursor_tracker = CursorTracker()
+        self.cursor_tracker = cursor_tracker or CursorTracker(auto_calibrate=True)
 
         self.latest_telemetry: Dict[str, Any] = {
             "timestamp": time.time(),

@@ -178,6 +178,22 @@ class HandsfreeEngine:
 
                 if self.dashboard:
                     self.dashboard.update_telemetry("pose", {"yaw": yaw, "pitch": pitch, "roll": roll})
+                    if hasattr(self.dashboard, "cursor_tracker"):
+                        cursor_pos, (dx, dy) = self.dashboard.cursor_tracker.process_head_pose(
+                            yaw, pitch, event.timestamp
+                        )
+                        dwell_status = self.dashboard.cursor_tracker.process_dwell(
+                            cursor_pos[0], cursor_pos[1], event.timestamp
+                        )
+                        self.dashboard.update_telemetry("cursor", {
+                            "x": cursor_pos[0], "y": cursor_pos[1], "dx": dx, "dy": dy
+                        })
+                        self.dashboard.update_telemetry("dwell", {
+                            "state": dwell_status.state.value,
+                            "progress": dwell_status.progress,
+                            "action": dwell_status.action.value,
+                            "dragging": dwell_status.is_dragging,
+                        })
 
             elif event.signal_type == SignalType.BLENDSHAPE:
                 intents.extend(self.slowpath.process_blendshapes(event.value, event.timestamp))

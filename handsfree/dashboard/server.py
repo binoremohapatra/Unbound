@@ -191,3 +191,16 @@ class DashboardServer:
         self._thread = threading.Thread(target=run_server, daemon=True, name="DashboardThread")
         self._thread.start()
         logger.info(f"Dashboard server running at http://{self.host}:{self.port}")
+
+
+if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO)
+    srv = DashboardServer(port=8080)
+    srv.start()
+    print("Handsfree HUD Dashboard live at http://127.0.0.1:8080/ (Press Ctrl+C to stop)")
+    try:
+        while True:
+            time.sleep(1)
+    except KeyboardInterrupt:
+        print("\nStopping...")
+        srv.stop()

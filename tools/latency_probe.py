@@ -101,7 +101,7 @@ def main() -> int:
             def __init__(self, p, s):
                 self._s = app.ReplaySource(p, s)
             def poll(self, now): return self._s.poll(now)
-            def close(self): pass
+            def close(self): return None
             @property
             def finished(self): return self._s.finished
         sources = [_Once(a.replay, a.speed)]

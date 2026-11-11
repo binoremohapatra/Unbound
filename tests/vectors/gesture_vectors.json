@@ -1,0 +1,783 @@
+{
+  "_comment": "Shared gesture-FSM test vectors. Consumed by firmware/tests/native/test_core.cpp (C++ GestureFsm) and host/omniband Python tests via omniband/fsm_core.py. Times are integer ms on the device clock. 'in' steps: {t, ch(1-4), down:bool, a:peak counts, d?:duration ms on up}. Optional steps: {t, cmd:'set_mode', mode:N} | {t, cmd:'night', on:bool} | {t, cmd:'sos_cancel'}. 'expect': {t, kind:'ges', g, d?} - every listed gesture must be produced; unlisted gestures are failures. Runners tick at 1 ms. Thresholds assumed: thr_on=[220,220,220,260] (defaults).",
+  "vectors": [
+    {
+      "name": "ch4_single_tap_mode0",
+      "mode": 0,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 300,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        }
+      ],
+      "expect": [
+        {
+          "t": 620,
+          "kind": "ges",
+          "g": "SINGLE"
+        }
+      ]
+    },
+    {
+      "name": "ch4_double_tap_mode0",
+      "mode": 0,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 300,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        },
+        {
+          "t": 500,
+          "ch": 4,
+          "down": true,
+          "a": 880
+        },
+        {
+          "t": 700,
+          "ch": 4,
+          "down": false,
+          "a": 880,
+          "d": 200
+        }
+      ],
+      "expect": [
+        {
+          "t": 1020,
+          "kind": "ges",
+          "g": "DOUBLE"
+        }
+      ]
+    },
+    {
+      "name": "ch4_triple_tap_mode2_sos_pending",
+      "mode": 2,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 950
+        },
+        {
+          "t": 280,
+          "ch": 4,
+          "down": false,
+          "a": 950,
+          "d": 180
+        },
+        {
+          "t": 480,
+          "ch": 4,
+          "down": true,
+          "a": 940
+        },
+        {
+          "t": 660,
+          "ch": 4,
+          "down": false,
+          "a": 940,
+          "d": 180
+        },
+        {
+          "t": 860,
+          "ch": 4,
+          "down": true,
+          "a": 960
+        },
+        {
+          "t": 1040,
+          "ch": 4,
+          "down": false,
+          "a": 960,
+          "d": 180
+        }
+      ],
+      "expect": [
+        {
+          "t": 1040,
+          "kind": "ges",
+          "g": "TRIPLE"
+        },
+        {
+          "t": 1040,
+          "kind": "ges",
+          "g": "SOS_PENDING"
+        }
+      ]
+    },
+    {
+      "name": "ch4_triple_too_slow_is_not_triple",
+      "mode": 0,
+      "in": [
+        {
+          "t": 0,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 200,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        },
+        {
+          "t": 900,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 1100,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        },
+        {
+          "t": 2000,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 2200,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        }
+      ],
+      "expect": [
+        {
+          "t": 520,
+          "kind": "ges",
+          "g": "SINGLE"
+        },
+        {
+          "t": 1420,
+          "kind": "ges",
+          "g": "SINGLE"
+        },
+        {
+          "t": 2520,
+          "kind": "ges",
+          "g": "SINGLE"
+        }
+      ]
+    },
+    {
+      "name": "ch4_weak_third_tap_not_triple",
+      "mode": 2,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 950
+        },
+        {
+          "t": 280,
+          "ch": 4,
+          "down": false,
+          "a": 950,
+          "d": 180
+        },
+        {
+          "t": 480,
+          "ch": 4,
+          "down": true,
+          "a": 940
+        },
+        {
+          "t": 660,
+          "ch": 4,
+          "down": false,
+          "a": 940,
+          "d": 180
+        },
+        {
+          "t": 1100,
+          "ch": 4,
+          "down": true,
+          "a": 300
+        },
+        {
+          "t": 1280,
+          "ch": 4,
+          "down": false,
+          "a": 300,
+          "d": 180
+        }
+      ],
+      "expect": [
+        {
+          "t": 980,
+          "kind": "ges",
+          "g": "DOUBLE"
+        },
+        {
+          "t": 1600,
+          "kind": "ges",
+          "g": "SINGLE"
+        }
+      ]
+    },
+    {
+      "name": "ch4_chew_guard_reject",
+      "mode": 0,
+      "in": [
+        {
+          "t": 0,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 150,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 150
+        },
+        {
+          "t": 350,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 500,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 150
+        },
+        {
+          "t": 700,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 850,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 150
+        },
+        {
+          "t": 1050,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 1200,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 150
+        }
+      ],
+      "expect": [
+        {
+          "t": 850,
+          "kind": "ges",
+          "g": "TRIPLE"
+        },
+        {
+          "t": 1200,
+          "kind": "ges",
+          "g": "REJECT"
+        }
+      ]
+    },
+    {
+      "name": "ch4_noise_press_under_30ms",
+      "mode": 0,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 120,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 20
+        }
+      ],
+      "expect": []
+    },
+    {
+      "name": "ch4_medium_hold_no_gesture",
+      "mode": 0,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 700,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 600
+        }
+      ],
+      "expect": []
+    },
+    {
+      "name": "ch4_long_hold_mode0",
+      "mode": 0,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 3200,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 3100
+        }
+      ],
+      "expect": [
+        {
+          "t": 3100,
+          "kind": "ges",
+          "g": "LONG"
+        },
+        {
+          "t": 3100,
+          "kind": "ges",
+          "g": "PICKER_OPEN"
+        }
+      ]
+    },
+    {
+      "name": "ch4_long_hold_disabled_mode4",
+      "mode": 4,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 3200,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 3100
+        }
+      ],
+      "expect": []
+    },
+    {
+      "name": "picker_flow_mode0",
+      "mode": 0,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 3200,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 3100
+        },
+        {
+          "t": 3400,
+          "ch": 2,
+          "down": true,
+          "a": 700
+        },
+        {
+          "t": 3600,
+          "ch": 2,
+          "down": false,
+          "a": 700,
+          "d": 200
+        },
+        {
+          "t": 3800,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 4000,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        }
+      ],
+      "expect": [
+        {
+          "t": 3100,
+          "kind": "ges",
+          "g": "LONG"
+        },
+        {
+          "t": 3100,
+          "kind": "ges",
+          "g": "PICKER_OPEN"
+        },
+        {
+          "t": 4320,
+          "kind": "ges",
+          "g": "MODE_SET"
+        }
+      ]
+    },
+    {
+      "name": "sos_confirm_no_cancel_mode2",
+      "mode": 2,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 950
+        },
+        {
+          "t": 280,
+          "ch": 4,
+          "down": false,
+          "a": 950,
+          "d": 180
+        },
+        {
+          "t": 480,
+          "ch": 4,
+          "down": true,
+          "a": 940
+        },
+        {
+          "t": 660,
+          "ch": 4,
+          "down": false,
+          "a": 940,
+          "d": 180
+        },
+        {
+          "t": 860,
+          "ch": 4,
+          "down": true,
+          "a": 960
+        },
+        {
+          "t": 1040,
+          "ch": 4,
+          "down": false,
+          "a": 960,
+          "d": 180
+        }
+      ],
+      "expect": [
+        {
+          "t": 1040,
+          "kind": "ges",
+          "g": "TRIPLE"
+        },
+        {
+          "t": 1040,
+          "kind": "ges",
+          "g": "SOS_PENDING"
+        },
+        {
+          "t": 4040,
+          "kind": "ges",
+          "g": "SOS_CONFIRMED"
+        }
+      ]
+    },
+    {
+      "name": "sos_cancel_hold_mode3",
+      "mode": 3,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 950
+        },
+        {
+          "t": 280,
+          "ch": 4,
+          "down": false,
+          "a": 950,
+          "d": 180
+        },
+        {
+          "t": 480,
+          "ch": 4,
+          "down": true,
+          "a": 940
+        },
+        {
+          "t": 660,
+          "ch": 4,
+          "down": false,
+          "a": 940,
+          "d": 180
+        },
+        {
+          "t": 860,
+          "ch": 4,
+          "down": true,
+          "a": 960
+        },
+        {
+          "t": 1040,
+          "ch": 4,
+          "down": false,
+          "a": 960,
+          "d": 180
+        },
+        {
+          "t": 1400,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 2300,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 900
+        }
+      ],
+      "expect": [
+        {
+          "t": 1040,
+          "kind": "ges",
+          "g": "TRIPLE"
+        },
+        {
+          "t": 1040,
+          "kind": "ges",
+          "g": "SOS_PENDING"
+        },
+        {
+          "t": 2200,
+          "kind": "ges",
+          "g": "SOS_CANCELLED"
+        }
+      ]
+    },
+    {
+      "name": "night_bruxism_mode5",
+      "mode": 5,
+      "in": [
+        {
+          "t": 0,
+          "cmd": "night",
+          "on": true
+        },
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 2700,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 2600
+        },
+        {
+          "t": 3000,
+          "ch": 4,
+          "down": true,
+          "a": 850
+        },
+        {
+          "t": 3200,
+          "ch": 4,
+          "down": false,
+          "a": 850,
+          "d": 200
+        }
+      ],
+      "expect": [
+        {
+          "t": 2600,
+          "kind": "ges",
+          "g": "BRUX",
+          "d": 2500
+        },
+        {
+          "t": 2821,
+          "kind": "ges",
+          "g": "BRUX_END",
+          "d": 2600
+        }
+      ]
+    },
+    {
+      "name": "night_ch4_decoding_disabled",
+      "mode": 5,
+      "in": [
+        {
+          "t": 0,
+          "cmd": "night",
+          "on": true
+        },
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 300,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        },
+        {
+          "t": 500,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 700,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        },
+        {
+          "t": 900,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 1100,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        }
+      ],
+      "expect": []
+    },
+    {
+      "name": "mode_change_resets_pending_gestures",
+      "mode": 0,
+      "in": [
+        {
+          "t": 100,
+          "ch": 4,
+          "down": true,
+          "a": 900
+        },
+        {
+          "t": 300,
+          "ch": 4,
+          "down": false,
+          "a": 900,
+          "d": 200
+        },
+        {
+          "t": 400,
+          "cmd": "set_mode",
+          "mode": 2
+        },
+        {
+          "t": 500,
+          "ch": 4,
+          "down": true,
+          "a": 950
+        },
+        {
+          "t": 680,
+          "ch": 4,
+          "down": false,
+          "a": 950,
+          "d": 180
+        },
+        {
+          "t": 880,
+          "ch": 4,
+          "down": true,
+          "a": 940
+        },
+        {
+          "t": 1060,
+          "ch": 4,
+          "down": false,
+          "a": 940,
+          "d": 180
+        },
+        {
+          "t": 1260,
+          "ch": 4,
+          "down": true,
+          "a": 960
+        },
+        {
+          "t": 1440,
+          "ch": 4,
+          "down": false,
+          "a": 960,
+          "d": 180
+        }
+      ],
+      "expect": [
+        {
+          "t": 1440,
+          "kind": "ges",
+          "g": "TRIPLE"
+        },
+        {
+          "t": 1440,
+          "kind": "ges",
+          "g": "SOS_PENDING"
+        }
+      ]
+    }
+  ]
+}

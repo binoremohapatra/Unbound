@@ -94,7 +94,7 @@ class LoopingReplay:
         return self._src.poll(now)
 
     def close(self):
-        pass
+        return None
 
 
 def main() -> int:

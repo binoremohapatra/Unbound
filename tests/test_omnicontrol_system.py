@@ -17,9 +17,9 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-# Ensure omnicontrol_os is importable
-OS_DIR = Path("D:/unbound/omnicontrol_os")
-if OS_DIR.is_dir() and str(OS_DIR) not in sys.path:
+# Ensure omnicontrol_os / unbound_os is importable
+OS_DIR = Path("D:/unbound/unbound_os") if Path("D:/unbound/unbound_os").is_dir() else Path("D:/unbound/omnicontrol_os")
+if str(OS_DIR) not in sys.path:
     sys.path.insert(0, str(OS_DIR))
 
 try:

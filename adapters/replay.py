@@ -57,7 +57,7 @@ class ReplaySource:
         return out
 
     def close(self) -> None:
-        pass
+        return None
 
     @property
     def duration_s(self) -> float:

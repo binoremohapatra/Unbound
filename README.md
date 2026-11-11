@@ -217,6 +217,35 @@ python main.py [options]
 
 ---
 
+## 📡 OmniBand V2 Hardware Link
+
+OmniBand V2 is a 4-channel biosignal device (ESP32, 500 Hz DSP) speaking
+NDJSON over USB Serial and Bluetooth SPP. `protocol/constants.json` is the
+single source of truth — `tools/gen_constants.py` generates both the
+firmware (`constants_gen.h`) and host (`constants_gen.py`) constants.
+
+```bash
+# Firmware (ESP32 Dev Module)
+"C:\Program Files\Arduino CLI\arduino-cli.exe" compile --fqbn esp32:esp32:esp32 firmware/omniband_v2_firmware
+
+# Host — simulator self-test (no hardware needed)
+python host/omniband_engine.py --simulate --self-test
+
+# Host — real device
+python host/omniband_engine.py --port COM5 --baud 115200
+python tools/omniband_ping.py --port COM5 --count 20
+
+# Six modes: ESPORTS / OT-WORK / ASSIST / INDUSTRY / ICU-SOS / DAILY
+# See docs/MODES.md, docs/BRINGUP_CHECKLIST.md, docs/REQUIREMENTS_TRACE.md
+```
+
+Safety: emergency `release_all` dominates routing — link loss, watchdog
+expiry (250 ms deadman), SOS/e-stop, foreground change, and process exit all
+release held outputs idempotently. Dry-run sink logs every command; no fake
+injection success is ever reported.
+
+---
+
 ## 🧪 Automated Test Suite
 
 ```bash

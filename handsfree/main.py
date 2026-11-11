@@ -28,6 +28,7 @@ from handsfree.adapters.webcam import WebcamAdapter
 from handsfree.adapters.audio import AudioAdapter
 from handsfree.adapters.switch import SwitchAdapter
 from handsfree.adapters.replay import ReplayAdapter
+from handsfree.core.cursor_tracker import CursorTracker
 from handsfree.dashboard.server import DashboardServer
 
 logging.basicConfig(

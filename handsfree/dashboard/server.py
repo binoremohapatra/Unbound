@@ -198,6 +198,12 @@ class DashboardServer:
         self._thread.start()
         logger.info(f"Dashboard server running at http://{self.host}:{self.port}")
 
+    def stop(self) -> None:
+        """Stops the background event loop and WebSocket server."""
+        if self._loop and self._loop.is_running():
+            self._loop.call_soon_threadsafe(self._loop.stop)
+        logger.info("Dashboard server stopped.")
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO)

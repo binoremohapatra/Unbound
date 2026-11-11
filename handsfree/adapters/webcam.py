@@ -1,6 +1,7 @@
-"""Webcam adapter using MediaPipe: emits head pose and facial blendshape SignalEvents."""
+"""Webcam adapter using MediaPipe FaceLandmarker: emits head pose and facial blendshape SignalEvents."""
 
 import logging
+from pathlib import Path
 import threading
 import time
 from typing import Callable, Optional, Tuple
@@ -74,22 +75,122 @@ class WebcamAdapter:
 
         return yaw, pitch, roll
 
+    def _find_model_path(self) -> Optional[Path]:
+        candidates = [
+            Path("face_landmarker.task"),
+            Path(__file__).resolve().parent.parent.parent / "face_landmarker.task",
+            Path(__file__).resolve().parent.parent / "face_landmarker.task",
+        ]
+        for c in candidates:
+            if c.is_file():
+                return c
+        return None
+
     def _capture_loop(self) -> None:
-        if not HAS_CV2 or not HAS_MEDIAPIPE:
-            logger.warning("OpenCV or MediaPipe not installed. Running webcam adapter in mock mode.")
+        if not HAS_CV2:
+            logger.warning("OpenCV not installed. Running webcam adapter in mock mode.")
             self._run_mock_loop()
             return
 
         cap = cv2.VideoCapture(self.camera_id)
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        cap.set(cv2.CAP_PROP_FPS, self.fps)
+        if hasattr(cv2, "CAP_PROP_FRAME_WIDTH"):
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        if hasattr(cv2, "CAP_PROP_FRAME_HEIGHT"):
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        if hasattr(cv2, "CAP_PROP_FPS"):
+            cap.set(cv2.CAP_PROP_FPS, self.fps)
 
         if not cap.isOpened():
             logger.error(f"Cannot open camera {self.camera_id}. Falling back to mock loop.")
             self._run_mock_loop()
             return
 
+        # Attempt 1: Modern MediaPipe Tasks FaceLandmarker
+        model_path = self._find_model_path()
+        if HAS_MEDIAPIPE and hasattr(mp, "tasks") and model_path:
+            try:
+                base = mp.tasks.BaseOptions(model_asset_path=str(model_path))
+                options = mp.tasks.vision.FaceLandmarkerOptions(
+                    base_options=base,
+                    output_face_blendshapes=True,
+                    num_faces=1,
+                    min_face_detection_confidence=0.5,
+                    min_tracking_confidence=0.5,
+                )
+                landmarker = mp.tasks.vision.FaceLandmarker.create_from_options(options)
+                logger.info("Using MediaPipe Tasks FaceLandmarker for vision tracking.")
+                self._run_mediapipe_tasks_loop(cap, landmarker)
+                return
+            except Exception as e:
+                logger.warning(f"Could not initialize MediaPipe Tasks FaceLandmarker: {e}")
+
+        # Attempt 2: Legacy mp.solutions.face_mesh
+        if HAS_MEDIAPIPE and hasattr(mp, "solutions") and hasattr(mp.solutions, "face_mesh"):
+            try:
+                logger.info("Using legacy MediaPipe solutions.face_mesh.")
+                self._run_legacy_solutions_loop(cap)
+                return
+            except Exception as e:
+                logger.warning(f"Could not initialize legacy FaceMesh: {e}")
+
+        # Attempt 3: Built-in OpenCV Face Tracking (Cascade Classifier)
+        logger.info("Using built-in OpenCV face detection for head tracking.")
+        self._run_opencv_cascade_loop(cap)
+
+    def _run_mediapipe_tasks_loop(self, cap, landmarker) -> None:
+        while self.is_running:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+
+            now = time.time()
+            if self.on_heartbeat:
+                self.on_heartbeat()
+
+            rgb_frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb_frame)
+            detection_result = landmarker.detect(mp_image)
+
+            if detection_result.face_landmarks:
+                face_landmarks = detection_result.face_landmarks[0]
+                h, w, _ = frame.shape
+                yaw, pitch, roll = self._estimate_head_pose(face_landmarks, w, h)
+
+                if self.on_event:
+                    self.on_event(
+                        SignalEvent(
+                            signal_type=SignalType.HEAD_POSE,
+                            name="pose",
+                            value={"yaw": yaw, "pitch": pitch, "roll": roll},
+                            timestamp=now,
+                        )
+                    )
+
+                # Extract blendshapes
+                blendshape_map = {}
+                if detection_result.face_blendshapes:
+                    for b in detection_result.face_blendshapes[0]:
+                        blendshape_map[b.category_name] = b.score
+                else:
+                    upper_lip = face_landmarks[13].y
+                    lower_lip = face_landmarks[14].y
+                    jaw_open_raw = max(0.0, min(1.0, (lower_lip - upper_lip) * 15.0))
+                    blendshape_map["jawOpen"] = jaw_open_raw
+
+                if self.on_event:
+                    self.on_event(
+                        SignalEvent(
+                            signal_type=SignalType.BLENDSHAPE,
+                            name="blendshapes",
+                            value=blendshape_map,
+                            timestamp=now,
+                        )
+                    )
+
+        cap.release()
+
+    def _run_legacy_solutions_loop(self, cap) -> None:
         mp_face_mesh = mp.solutions.face_mesh
         with mp_face_mesh.FaceMesh(
             max_num_faces=1,
@@ -140,6 +241,48 @@ class WebcamAdapter:
 
             cap.release()
 
+    def _run_opencv_cascade_loop(self, cap) -> None:
+        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+        face_cascade = cv2.CascadeClassifier(cascade_path)
+
+        while self.is_running:
+            ret, frame = cap.read()
+            if not ret:
+                time.sleep(0.01)
+                continue
+
+            now = time.time()
+            if self.on_heartbeat:
+                self.on_heartbeat()
+
+            gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+            faces = face_cascade.detectMultiScale(gray, scaleFactor=1.2, minNeighbors=5, minSize=(60, 60))
+
+            if len(faces) > 0:
+                (x, y, w, h) = faces[0]
+                frame_h, frame_w = frame.shape[:2]
+                face_center_x = x + w / 2.0
+                face_center_y = y + h / 2.0
+
+                # Compute approximate yaw and pitch based on displacement from frame center
+                norm_x = (face_center_x - frame_w / 2.0) / (frame_w / 2.0)
+                norm_y = (face_center_y - frame_h / 2.0) / (frame_h / 2.0)
+
+                yaw = norm_x * 45.0
+                pitch = norm_y * 35.0
+
+                if self.on_event:
+                    self.on_event(
+                        SignalEvent(
+                            signal_type=SignalType.HEAD_POSE,
+                            name="pose",
+                            value={"yaw": yaw, "pitch": pitch, "roll": 0.0},
+                            timestamp=now,
+                        )
+                    )
+
+        cap.release()
+
     def _run_mock_loop(self) -> None:
         while self.is_running:
             time.sleep(1.0 / self.fps)
@@ -155,4 +298,3 @@ class WebcamAdapter:
                         timestamp=now,
                     )
                 )
-

@@ -356,6 +356,41 @@
     .osk-key.action-clear { background: #451a1a; color: #f87171; }
     .osk-key.action-bksp { background: #3b2a1a; color: #fbbf24; }
 
+    .osk-key.head-hovered, .predict-chip.head-hovered, .action-btn.head-hovered {
+      border-color: #38bdf8 !important;
+      box-shadow: 0 0 16px rgba(56, 189, 248, 0.6);
+      transform: scale(1.03);
+    }
+
+    /* Floating Head Pointer Cursor */
+    .head-cursor {
+      position: fixed;
+      top: 0;
+      left: 0;
+      width: 28px;
+      height: 28px;
+      margin-left: -14px;
+      margin-top: -14px;
+      border-radius: 50%;
+      background: rgba(56, 189, 248, 0.35);
+      border: 2px solid #38bdf8;
+      box-shadow: 0 0 14px rgba(56, 189, 248, 0.8);
+      pointer-events: none;
+      z-index: 999999;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      transition: transform 0.04s ease-out;
+    }
+
+    .head-cursor-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ffffff;
+      box-shadow: 0 0 6px #ffffff;
+    }
+
     /* Action pills */
     .pill-container {
       display: flex;
@@ -524,7 +559,12 @@
     </div>
   </main>
 
+  <div id="headCursor" class="head-cursor" style="display:none;">
+    <div class="head-cursor-dot"></div>
+  </div>
+
   <script>
+    const headCursor = document.getElementById('headCursor');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
     const stickCanvas = document.getElementById('stickCanvas');
@@ -642,6 +682,58 @@
 
     renderKeyboard();
 
+    let headTarget = null;
+    let headHoverTimer = null;
+    let headHoverStart = 0;
+    const HEAD_DWELL_MS = 550;
+
+    function handleHeadPointerAt(x, y) {
+      const el = document.elementFromPoint(x, y);
+      const target = el ? el.closest('.osk-key, .predict-chip, .dwell-btn, .action-btn, #recenterBtn') : null;
+
+      if (target === headTarget) return;
+
+      if (headTarget) {
+        headTarget.classList.remove('head-hovered');
+        const prevFill = headTarget.querySelector('.dwell-fill-bar');
+        if (prevFill) prevFill.style.height = '0%';
+        if (headHoverTimer) {
+          clearInterval(headHoverTimer);
+          headHoverTimer = null;
+        }
+      }
+
+      headTarget = target;
+      if (!target) return;
+
+      target.classList.add('head-hovered');
+      headHoverStart = performance.now();
+      const fillEl = target.querySelector('.dwell-fill-bar');
+
+      headHoverTimer = setInterval(() => {
+        if (!headTarget) {
+          clearInterval(headHoverTimer);
+          headHoverTimer = null;
+          return;
+        }
+        const elapsed = performance.now() - headHoverStart;
+        const prog = Math.min(1.0, elapsed / HEAD_DWELL_MS);
+
+        if (fillEl) {
+          fillEl.style.height = `${prog * 100}%`;
+        }
+
+        if (prog >= 1.0) {
+          clearInterval(headHoverTimer);
+          headHoverTimer = null;
+          if (fillEl) fillEl.style.height = '0%';
+          headTarget.click();
+          headTarget.classList.remove('head-hovered');
+          headTarget = null;
+        }
+      }, 25);
+    }
+
     function drawStick(x, y) {
       const cx = stickCanvas.width / 2;
       const cy = stickCanvas.height / 2;
@@ -726,12 +818,31 @@
           rollBar.style.width = `${Math.min(100, Math.abs(data.pose.roll) * 3)}%`;
         }
 
+        // Head Cursor Position & Hit-testing on Keyboard
+        if (data.cursor) {
+          const normX = data.cursor.norm_x !== undefined ? data.cursor.norm_x : (data.cursor.x / 1536);
+          const normY = data.cursor.norm_y !== undefined ? data.cursor.norm_y : (data.cursor.y / 864);
+          const px = Math.max(10, Math.min(window.innerWidth - 10, normX * window.innerWidth));
+          const py = Math.max(10, Math.min(window.innerHeight - 10, normY * window.innerHeight));
+
+          headCursor.style.display = 'flex';
+          headCursor.style.transform = `translate(${px}px, ${py}px)`;
+
+          handleHeadPointerAt(px, py);
+        }
+
         // Tracky Mouse Dwell progress
         if (data.dwell) {
           const prog = data.dwell.progress || 0.0;
           const deg = Math.round(prog * 360);
           dwellCircle.style.setProperty('--dwell-deg', `${deg}deg`);
           dwellPercent.textContent = `${Math.round(prog * 100)}%`;
+
+          if (data.dwell.state === 'triggered' && headTarget) {
+            headTarget.click();
+            headTarget.classList.remove('head-hovered');
+            headTarget = null;
+          }
         }
 
         // OptiKey OSK state

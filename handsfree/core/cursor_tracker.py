@@ -168,6 +168,19 @@ class CursorTracker:
         self.sensitivity_y = sensitivity_y
         self.curve_exponent = curve_exponent
         self.deadzone_deg = deadzone_deg
+
+        # Auto-detect native display resolution on Windows
+        import os
+        if os.name == "nt" and screen_width == 1920 and screen_height == 1080:
+            try:
+                import ctypes
+                w = ctypes.windll.user32.GetSystemMetrics(0)
+                h = ctypes.windll.user32.GetSystemMetrics(1)
+                if w > 0 and h > 0:
+                    screen_width, screen_height = w, h
+            except Exception:
+                pass
+
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.invert_x = invert_x

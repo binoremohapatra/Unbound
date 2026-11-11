@@ -188,11 +188,25 @@ class HandsfreeEngine:
                 if self.dashboard:
                     self.dashboard.update_telemetry("pose", {"yaw": yaw, "pitch": pitch, "roll": roll})
                     if hasattr(self.dashboard, "cursor_tracker"):
-                        dx, dy, (cx, cy), dwell_status = self.dashboard.cursor_tracker.process_head_pose(
+                        tracker = self.dashboard.cursor_tracker
+                        dx, dy, (cx, cy), dwell_status = tracker.process_head_pose(
                             yaw, pitch, event.timestamp
                         )
+                        norm_x = cx / max(1.0, float(tracker.screen_width))
+                        norm_y = cy / max(1.0, float(tracker.screen_height))
+
+                        # Move physical Windows cursor on non-dry-run
+                        import os
+                        if not self.args.dry_run and os.name == "nt":
+                            try:
+                                import ctypes
+                                ctypes.windll.user32.SetCursorPos(int(cx), int(cy))
+                            except Exception:
+                                pass
+
                         self.dashboard.update_telemetry("cursor", {
-                            "x": cx, "y": cy, "dx": dx, "dy": dy
+                            "x": cx, "y": cy, "dx": dx, "dy": dy,
+                            "norm_x": norm_x, "norm_y": norm_y,
                         })
                         if dwell_status:
                             self.dashboard.update_telemetry("dwell", {
@@ -201,6 +215,13 @@ class HandsfreeEngine:
                                 "action": dwell_status.action.value,
                                 "dragging": dwell_status.is_dragging,
                             })
+                            if dwell_status.state.value == "triggered" and not self.args.dry_run and os.name == "nt":
+                                try:
+                                    import ctypes
+                                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                                except Exception:
+                                    pass
 
             elif event.signal_type == SignalType.BLENDSHAPE:
                 intents.extend(self.slowpath.process_blendshapes(event.value, event.timestamp))

@@ -133,7 +133,7 @@ class RecordingBackend:
         self.total_dy += dy
 
     def commit(self) -> None:
-        pass
+        return None
 
 
 def build_key_input(name: str, down: bool) -> INPUT:

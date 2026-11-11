@@ -45,3 +45,10 @@ py-modules = [
 ]
 packages = ["core", "adapters"]
 
+[tool.pytest.ini_options]
+norecursedirs = ["my_project*", ".git", ".pytest_cache", "build", "dist", "firmware", "node_modules"]
+testpaths = ["tests", "handsfree/tests"]
+markers = [
+    "windows_only: tests that require a real Windows desktop/Win32",
+]
+

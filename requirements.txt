@@ -23,3 +23,8 @@ websockets>=11.0
 
 # Automated Testing & Dev
 pytest>=7.0.0
+
+# OmniBand V2 hardware link (USB serial + BT SPP)
+pyserial>=3.5
+# Optional: spoken cues for SOS/bruxism alerts
+pyttsx3>=2.90; platform_system == "Windows"

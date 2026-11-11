@@ -238,6 +238,30 @@
         <strong id="systemState">ACTIVE</strong>
       </div>
     </div>
+
+    <div class="card" id="omnibandCard" style="display:none;">
+      <h2>OmniBand V2</h2>
+      <div class="meter-group">
+        <div class="meter-row">
+          <span class="meter-label">Mode</span>
+          <span class="meter-value" id="obMode">-</span>
+        </div>
+        <div class="meter-row">
+          <span class="meter-label">Link</span>
+          <span class="meter-value" id="obLink">-</span>
+        </div>
+        <div class="meter-row">
+          <span class="meter-label">FSM</span>
+          <span class="meter-value" id="obFsm">-</span>
+        </div>
+        <div class="meter-row">
+          <span class="meter-label">Last Gesture</span>
+          <span class="meter-value" id="obGes">-</span>
+        </div>
+      </div>
+      <div class="meter-group" id="obEnvList"></div>
+      <div style="margin-top: 0.75rem; color: var(--muted); font-size: 0.8rem;" id="obStats"></div>
+    </div>
   </main>
 
   <script>
@@ -346,6 +370,29 @@
             `;
             blendshapeList.appendChild(row);
           }
+        }
+
+        if (data.omniband) {
+          const ob = data.omniband;
+          document.getElementById('omnibandCard').style.display = '';
+          document.getElementById('obMode').textContent = ob.mode_name || ('M' + ob.mode);
+          document.getElementById('obLink').textContent = ob.link || '-';
+          document.getElementById('obFsm').textContent = ob.fsm || '-';
+          document.getElementById('obGes').textContent = ob.last_ges || '-';
+          const envList = document.getElementById('obEnvList');
+          envList.innerHTML = '';
+          (ob.env || []).forEach((v, i) => {
+            const row = document.createElement('div');
+            row.className = 'meter-row';
+            row.innerHTML = `
+              <span class="meter-label">CH${i + 1}</span>
+              <div class="meter-bar"><div class="meter-fill" style="width: ${Math.min(100, v / 20)}%"></div></div>
+              <span class="meter-value">${Math.round(v)}</span>
+            `;
+            envList.appendChild(row);
+          });
+          document.getElementById('obStats').textContent =
+            `ges=${ob.ges || 0} evt=${ob.evts || 0} rel=${ob.releases || 0} sos=${ob.sos || 0} estop=${ob.estops || 0}`;
         }
       };
     }

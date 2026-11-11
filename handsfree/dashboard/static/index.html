@@ -410,9 +410,14 @@
       <h1>Unbound Handsfree HUD</h1>
       <span class="badge-sub">Gameface • Tracky • OptiKey</span>
     </div>
-    <div class="status-badge">
-      <div id="statusDot" class="dot"></div>
-      <span id="statusText">Connecting...</span>
+    <div style="display:flex; align-items:center; gap:0.75rem;">
+      <div id="blinkBadge" class="status-badge" style="border-color:#38bdf8; color:#38bdf8; transition:all 0.15s ease;">
+        <span>👁️ Double-Blink: <b>Ready</b></span>
+      </div>
+      <div class="status-badge">
+        <div id="statusDot" class="dot"></div>
+        <span id="statusText">Connecting...</span>
+      </div>
     </div>
   </header>
 
@@ -757,6 +762,27 @@
         if (data.blink_click) {
           statusDot.style.boxShadow = '0 0 16px #22c55e';
           setTimeout(() => { statusDot.style.boxShadow = ''; }, 300);
+        }
+
+        // Real-time Blink Telemetry Badge
+        if (data.blink) {
+          const bEl = document.getElementById('blinkBadge');
+          if (bEl) {
+            if (data.blink.clicked) {
+              bEl.innerHTML = '<span style="color:#22c55e;">💥 <b>CLICK! [●●]</b></span>';
+              bEl.style.borderColor = '#22c55e';
+              setTimeout(() => {
+                bEl.innerHTML = '<span>👁️ Double-Blink: <b>Ready</b></span>';
+                bEl.style.borderColor = '#38bdf8';
+              }, 400);
+            } else if (data.blink.count === 1) {
+              bEl.innerHTML = '<span style="color:#f59e0b;">👁️ <b>Blink 1/2 [●○]</b></span>';
+              bEl.style.borderColor = '#f59e0b';
+            } else {
+              bEl.innerHTML = '<span>👁️ Double-Blink: <b>Ready</b></span>';
+              bEl.style.borderColor = '#38bdf8';
+            }
+          }
         }
 
         // Tracky Mouse Dwell progress

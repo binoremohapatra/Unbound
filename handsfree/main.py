@@ -242,24 +242,32 @@ class HandsfreeEngine:
                 if self.dashboard:
                     self.dashboard.update_telemetry("blendshapes", blendshapes)
 
-                # Double-blink left-click detection
+                # High-accuracy double-blink left-click detection
                 blink_l = blendshapes.get("eyeBlinkLeft", 0.0)
                 blink_r = blendshapes.get("eyeBlinkRight", 0.0)
                 avg_blink = (blink_l + blink_r) / 2.0
+                effective_blink = max(avg_blink, max(blink_l, blink_r) * 0.90)
 
                 if self.dashboard and hasattr(self.dashboard, "cursor_tracker"):
                     tracker = self.dashboard.cursor_tracker
-                    if tracker.blink_detector and tracker.blink_detector.update(avg_blink, event.timestamp):
-                        logger.info("Double-blink detected! Dispatching Windows Left Click.")
-                        import os
-                        if not self.args.dry_run and os.name == "nt":
-                            try:
-                                import ctypes
-                                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
-                                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
-                            except Exception as e:
-                                logger.error(f"Error dispatching mouse click: {e}")
-                        self.dashboard.update_telemetry("blink_click", {"timestamp": event.timestamp})
+                    if tracker.blink_detector:
+                        clicked = tracker.blink_detector.update(effective_blink, event.timestamp)
+                        self.dashboard.update_telemetry("blink", {
+                            "score": effective_blink,
+                            "count": tracker.blink_detector.blink_count,
+                            "clicked": clicked,
+                        })
+                        if clicked:
+                            logger.info("Double-blink detected! Dispatching Windows Left Click.")
+                            import os
+                            if not self.args.dry_run and os.name == "nt":
+                                try:
+                                    import ctypes
+                                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+                                except Exception as e:
+                                    logger.error(f"Error dispatching mouse click: {e}")
+                            self.dashboard.update_telemetry("blink_click", {"timestamp": event.timestamp})
 
             elif event.signal_type == SignalType.AUDIO_POP:
                 intents.append(Intent(action="pop", value=1.0, source="audio"))

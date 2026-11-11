@@ -145,25 +145,20 @@ class DwellClicker:
 
 
 class DoubleBlinkDetector:
-    """Detects deliberate double-eye blinks to trigger clicks.
+    """High-accuracy deliberate double-eye blink detector with dynamic baseline.
     
-    A deliberate double blink is:
-      1. Eyes close (both blink scores > threshold) and open within 40ms-380ms -> Blink 1
-      2. Eyes close and open again within 100ms-700ms of Blink 1 -> Blink 2 (DOUBLE BLINK!)
+    Catches deliberate double blinks cleanly while rejecting single involuntary blinks
+    and prolonged eye closure (resting/sleeping).
     """
 
     def __init__(
         self,
-        blink_threshold: float = 0.48,
-        release_threshold: float = 0.25,
-        min_blink_duration: float = 0.04,
-        max_blink_duration: float = 0.38,
-        double_blink_window: float = 0.70,
-        cooldown: float = 0.50,
+        min_blink_duration: float = 0.03,    # Min 30ms (catches fast blinks on 30fps webcams)
+        max_blink_duration: float = 0.65,    # Max 650ms per blink (relaxed, natural)
+        double_blink_window: float = 1.05,   # Up to 1.05s between 1st and 2nd blink
+        cooldown: float = 0.40,              # Cooldown after triggering
         on_double_blink: Optional[Callable[[], None]] = None,
     ):
-        self.blink_threshold = blink_threshold
-        self.release_threshold = release_threshold
         self.min_blink_duration = min_blink_duration
         self.max_blink_duration = max_blink_duration
         self.double_blink_window = double_blink_window
@@ -172,12 +167,14 @@ class DoubleBlinkDetector:
 
         self.eyes_closed = False
         self.close_start_time = 0.0
+        self.peak_blink_score = 0.0
+        self.baseline_open = 0.12            # Adaptive open-eye baseline
         self.last_blink_time = 0.0
         self.blink_count = 0
         self.cooldown_end_time = 0.0
 
     def update(self, blink_score: float, timestamp: Optional[float] = None) -> bool:
-        """Updates with current average blink score (0.0 to 1.0).
+        """Updates with current blink score (0.0 to 1.0).
         
         Returns:
             True if double blink triggered on this frame, else False.
@@ -187,32 +184,47 @@ class DoubleBlinkDetector:
         if now < self.cooldown_end_time:
             return False
 
-        # Reset count if too much time has elapsed since first blink
+        # Reset count if window expired since first blink
         if self.blink_count > 0 and (now - self.last_blink_time) > self.double_blink_window:
             self.blink_count = 0
 
-        # Eye closing transition
-        if not self.eyes_closed and blink_score >= self.blink_threshold:
+        # Dynamic thresholds based on adaptive open-eye baseline
+        if not self.eyes_closed:
+            if blink_score < 0.30:
+                self.baseline_open = 0.90 * self.baseline_open + 0.10 * blink_score
+
+        activate_thresh = max(0.35, self.baseline_open + 0.20)
+        release_thresh = max(0.20, self.baseline_open + 0.08)
+
+        # 1. Eyes closing transition
+        if not self.eyes_closed and blink_score >= activate_thresh:
             self.eyes_closed = True
             self.close_start_time = now
+            self.peak_blink_score = blink_score
 
-        # Eye opening transition
-        elif self.eyes_closed and blink_score <= self.release_threshold:
-            self.eyes_closed = False
-            duration = now - self.close_start_time
+        # 2. While eyes are closed, track peak and watch for reopening
+        elif self.eyes_closed:
+            self.peak_blink_score = max(self.peak_blink_score, blink_score)
 
-            # Check if duration matches a natural intentional blink (40ms to 380ms)
-            if self.min_blink_duration <= duration <= self.max_blink_duration:
-                self.blink_count += 1
-                self.last_blink_time = now
+            # Eyes opening transition: score drops below release_thresh OR drops significantly from peak
+            has_opened = (blink_score <= release_thresh) or (blink_score <= self.peak_blink_score * 0.55)
 
-                if self.blink_count >= 2:
-                    # Double blink triggered!
-                    self.blink_count = 0
-                    self.cooldown_end_time = now + self.cooldown
-                    if self.on_double_blink:
-                        self.on_double_blink()
-                    return True
+            if has_opened:
+                self.eyes_closed = False
+                duration = now - self.close_start_time
+
+                # Check if blink duration is within intentional blink limits
+                if self.min_blink_duration <= duration <= self.max_blink_duration and self.peak_blink_score >= 0.38:
+                    self.blink_count += 1
+                    self.last_blink_time = now
+
+                    if self.blink_count >= 2:
+                        # Double blink SUCCESS!
+                        self.blink_count = 0
+                        self.cooldown_end_time = now + self.cooldown
+                        if self.on_double_blink:
+                            self.on_double_blink()
+                        return True
 
         return False
 

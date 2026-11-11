@@ -176,13 +176,17 @@ class WebcamAdapter:
                     for b in detection_result.face_blendshapes[0]:
                         blendshape_map[b.category_name] = b.score
 
-                # Landmark geometry fallback for blink & mouth if blendshapes missing
-                if "eyeBlinkLeft" not in blendshape_map or "eyeBlinkRight" not in blendshape_map:
-                    # Eye Aspect Ratio (EAR)
-                    ear_l = abs(face_landmarks[159].y - face_landmarks[145].y) / (abs(face_landmarks[33].x - face_landmarks[133].x) + 1e-6)
-                    ear_r = abs(face_landmarks[386].y - face_landmarks[374].y) / (abs(face_landmarks[263].x - face_landmarks[362].x) + 1e-6)
-                    blendshape_map["eyeBlinkLeft"] = max(0.0, min(1.0, (0.22 - ear_l) * 9.0))
-                    blendshape_map["eyeBlinkRight"] = max(0.0, min(1.0, (0.22 - ear_r) * 9.0))
+                # High-sensitivity Eye Aspect Ratio (EAR) ensembling
+                ear_l = abs(face_landmarks[159].y - face_landmarks[145].y) / (abs(face_landmarks[33].x - face_landmarks[133].x) + 1e-6)
+                ear_r = abs(face_landmarks[386].y - face_landmarks[374].y) / (abs(face_landmarks[263].x - face_landmarks[362].x) + 1e-6)
+                geom_blink_l = max(0.0, min(1.0, (0.24 - ear_l) * 9.0))
+                geom_blink_r = max(0.0, min(1.0, (0.24 - ear_r) * 9.0))
+
+                # Combine neural blendshapes with geometric EAR for maximum detection accuracy
+                bs_l = blendshape_map.get("eyeBlinkLeft", 0.0)
+                bs_r = blendshape_map.get("eyeBlinkRight", 0.0)
+                blendshape_map["eyeBlinkLeft"] = max(bs_l, geom_blink_l)
+                blendshape_map["eyeBlinkRight"] = max(bs_r, geom_blink_r)
 
                 if "jawOpen" not in blendshape_map:
                     upper_lip = face_landmarks[13].y

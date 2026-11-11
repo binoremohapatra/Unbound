@@ -386,6 +386,13 @@
       transition: transform 0.04s ease-out;
     }
 
+    .head-cursor.blink-clicked {
+      transform: scale(1.4);
+      background: rgba(34, 197, 94, 0.6) !important;
+      border-color: #22c55e !important;
+      box-shadow: 0 0 22px rgba(34, 197, 94, 1.0) !important;
+    }
+
     .head-cursor-dot {
       width: 8px;
       height: 8px;
@@ -851,6 +858,12 @@
           headCursor.style.transform = `translate(${px}px, ${py}px)`;
 
           handleHeadPointerAt(px, py);
+        }
+
+        // Double-blink click visual trigger
+        if (data.blink_click) {
+          headCursor.classList.add('blink-clicked');
+          setTimeout(() => headCursor.classList.remove('blink-clicked'), 300);
         }
 
         // Tracky Mouse Dwell progress

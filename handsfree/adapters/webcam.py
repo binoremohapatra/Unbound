@@ -175,7 +175,16 @@ class WebcamAdapter:
                 if detection_result.face_blendshapes:
                     for b in detection_result.face_blendshapes[0]:
                         blendshape_map[b.category_name] = b.score
-                else:
+
+                # Landmark geometry fallback for blink & mouth if blendshapes missing
+                if "eyeBlinkLeft" not in blendshape_map or "eyeBlinkRight" not in blendshape_map:
+                    # Eye Aspect Ratio (EAR)
+                    ear_l = abs(face_landmarks[159].y - face_landmarks[145].y) / (abs(face_landmarks[33].x - face_landmarks[133].x) + 1e-6)
+                    ear_r = abs(face_landmarks[386].y - face_landmarks[374].y) / (abs(face_landmarks[263].x - face_landmarks[362].x) + 1e-6)
+                    blendshape_map["eyeBlinkLeft"] = max(0.0, min(1.0, (0.22 - ear_l) * 9.0))
+                    blendshape_map["eyeBlinkRight"] = max(0.0, min(1.0, (0.22 - ear_r) * 9.0))
+
+                if "jawOpen" not in blendshape_map:
                     upper_lip = face_landmarks[13].y
                     lower_lip = face_landmarks[14].y
                     jaw_open_raw = max(0.0, min(1.0, (lower_lip - upper_lip) * 15.0))
@@ -233,11 +242,17 @@ class WebcamAdapter:
                         lower_lip = face_landmarks[14].y
                         jaw_open_raw = max(0.0, min(1.0, (lower_lip - upper_lip) * 15.0))
 
+                        # Eye Aspect Ratio for blink
+                        ear_l = abs(face_landmarks[159].y - face_landmarks[145].y) / (abs(face_landmarks[33].x - face_landmarks[133].x) + 1e-6)
+                        ear_r = abs(face_landmarks[386].y - face_landmarks[374].y) / (abs(face_landmarks[263].x - face_landmarks[362].x) + 1e-6)
+                        blink_l = max(0.0, min(1.0, (0.22 - ear_l) * 9.0))
+                        blink_r = max(0.0, min(1.0, (0.22 - ear_r) * 9.0))
+
                         self.on_event(
                             SignalEvent(
                                 signal_type=SignalType.BLENDSHAPE,
                                 name="blendshapes",
-                                value={"jawOpen": jaw_open_raw},
+                                value={"jawOpen": jaw_open_raw, "eyeBlinkLeft": blink_l, "eyeBlinkRight": blink_r},
                                 timestamp=now,
                             )
                         )

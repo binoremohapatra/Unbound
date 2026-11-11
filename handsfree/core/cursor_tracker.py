@@ -144,6 +144,79 @@ class DwellClicker:
         self.dwell_start_time = 0.0
 
 
+class DoubleBlinkDetector:
+    """Detects deliberate double-eye blinks to trigger clicks.
+    
+    A deliberate double blink is:
+      1. Eyes close (both blink scores > threshold) and open within 40ms-380ms -> Blink 1
+      2. Eyes close and open again within 100ms-700ms of Blink 1 -> Blink 2 (DOUBLE BLINK!)
+    """
+
+    def __init__(
+        self,
+        blink_threshold: float = 0.48,
+        release_threshold: float = 0.25,
+        min_blink_duration: float = 0.04,
+        max_blink_duration: float = 0.38,
+        double_blink_window: float = 0.70,
+        cooldown: float = 0.50,
+        on_double_blink: Optional[Callable[[], None]] = None,
+    ):
+        self.blink_threshold = blink_threshold
+        self.release_threshold = release_threshold
+        self.min_blink_duration = min_blink_duration
+        self.max_blink_duration = max_blink_duration
+        self.double_blink_window = double_blink_window
+        self.cooldown = cooldown
+        self.on_double_blink = on_double_blink
+
+        self.eyes_closed = False
+        self.close_start_time = 0.0
+        self.last_blink_time = 0.0
+        self.blink_count = 0
+        self.cooldown_end_time = 0.0
+
+    def update(self, blink_score: float, timestamp: Optional[float] = None) -> bool:
+        """Updates with current average blink score (0.0 to 1.0).
+        
+        Returns:
+            True if double blink triggered on this frame, else False.
+        """
+        now = timestamp if timestamp is not None else time.time()
+
+        if now < self.cooldown_end_time:
+            return False
+
+        # Reset count if too much time has elapsed since first blink
+        if self.blink_count > 0 and (now - self.last_blink_time) > self.double_blink_window:
+            self.blink_count = 0
+
+        # Eye closing transition
+        if not self.eyes_closed and blink_score >= self.blink_threshold:
+            self.eyes_closed = True
+            self.close_start_time = now
+
+        # Eye opening transition
+        elif self.eyes_closed and blink_score <= self.release_threshold:
+            self.eyes_closed = False
+            duration = now - self.close_start_time
+
+            # Check if duration matches a natural intentional blink (40ms to 380ms)
+            if self.min_blink_duration <= duration <= self.max_blink_duration:
+                self.blink_count += 1
+                self.last_blink_time = now
+
+                if self.blink_count >= 2:
+                    # Double blink triggered!
+                    self.blink_count = 0
+                    self.cooldown_end_time = now + self.cooldown
+                    if self.on_double_blink:
+                        self.on_double_blink()
+                    return True
+
+        return False
+
+
 class CursorTracker:
     """Project Gameface-inspired head pose to smooth cursor motion pipeline.
     
@@ -159,13 +232,15 @@ class CursorTracker:
         deadzone_deg: float = 1.5,
         screen_width: int = 1920,
         screen_height: int = 1080,
-        invert_x: bool = False,
+        invert_x: bool = True,
         invert_y: bool = False,
         enable_dwell: bool = True,
         dwell_time_ms: float = 650.0,
         angle_range_x: float = 14.0,
         angle_range_y: float = 10.0,
         auto_calibrate: bool = False,
+        enable_blink: bool = True,
+        on_double_blink: Optional[Callable[[], None]] = None,
     ):
         # Legacy delta-based sensitivity params (kept for API compat)
         self.sensitivity_x = sensitivity_x
@@ -214,6 +289,11 @@ class CursorTracker:
         # Dwell clicker integration
         self.dwell_clicker: Optional[DwellClicker] = (
             DwellClicker(dwell_time_ms=dwell_time_ms) if enable_dwell else None
+        )
+
+        # Double blink detector integration
+        self.blink_detector: Optional[DoubleBlinkDetector] = (
+            DoubleBlinkDetector(on_double_blink=on_double_blink) if enable_blink else None
         )
 
     def set_neutral(self, yaw: float, pitch: float) -> None:

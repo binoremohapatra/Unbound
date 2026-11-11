@@ -1,7 +1,7 @@
 """Unit tests for CursorTracker & Tracky-Mouse DwellClicker (Gameface + Tracky Mouse)."""
 
 import unittest
-from handsfree.core.cursor_tracker import CursorTracker, DwellClicker, DwellAction, DwellState
+from handsfree.core.cursor_tracker import CursorTracker, DwellClicker, DwellAction, DwellState, DoubleBlinkDetector
 
 
 class TestCursorTracker(unittest.TestCase):
@@ -97,6 +97,40 @@ class TestDwellClicker(unittest.TestCase):
         self.dwell.update(50.0, 50.0, timestamp=1.0)
         self.dwell.update(50.0, 50.0, timestamp=1.5)
         self.assertTrue(self.dwell.is_dragging)
+
+
+class TestDoubleBlinkDetector(unittest.TestCase):
+
+    def setUp(self):
+        self.clicks = 0
+        def on_click():
+            self.clicks += 1
+        self.detector = DoubleBlinkDetector(on_double_blink=on_click)
+
+    def test_single_blink_does_not_trigger(self):
+        # Eyes close then open once
+        self.assertFalse(self.detector.update(0.8, timestamp=1.0))
+        self.assertFalse(self.detector.update(0.1, timestamp=1.15))
+        # After 1.0s, window expires
+        self.assertFalse(self.detector.update(0.1, timestamp=2.0))
+        self.assertEqual(self.clicks, 0)
+
+    def test_double_blink_triggers_click(self):
+        # Blink 1
+        self.assertFalse(self.detector.update(0.8, timestamp=1.0))
+        self.assertFalse(self.detector.update(0.1, timestamp=1.15))
+
+        # Blink 2 within window
+        self.assertFalse(self.detector.update(0.8, timestamp=1.35))
+        triggered = self.detector.update(0.1, timestamp=1.48)
+        self.assertTrue(triggered)
+        self.assertEqual(self.clicks, 1)
+
+    def test_long_eye_closure_ignored(self):
+        # Eye closed for 1 second (resting/sleeping)
+        self.assertFalse(self.detector.update(0.8, timestamp=1.0))
+        self.assertFalse(self.detector.update(0.1, timestamp=2.0))
+        self.assertEqual(self.clicks, 0)
 
 
 if __name__ == "__main__":

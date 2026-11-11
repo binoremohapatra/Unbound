@@ -81,7 +81,9 @@ class HandsfreeEngine:
                 angle_range_x=args.angle_range_x,
                 angle_range_y=args.angle_range_y,
                 deadzone_deg=args.deadzone,
+                invert_x=args.invert_x,
                 auto_calibrate=True,
+                enable_blink=args.enable_blink_click,
             )
             self.dashboard = DashboardServer(
                 host=args.dashboard_host,
@@ -235,9 +237,29 @@ class HandsfreeEngine:
                                     pass
 
             elif event.signal_type == SignalType.BLENDSHAPE:
-                intents.extend(self.slowpath.process_blendshapes(event.value, event.timestamp))
+                blendshapes = event.value
+                intents.extend(self.slowpath.process_blendshapes(blendshapes, event.timestamp))
                 if self.dashboard:
-                    self.dashboard.update_telemetry("blendshapes", event.value)
+                    self.dashboard.update_telemetry("blendshapes", blendshapes)
+
+                # Double-blink left-click detection
+                blink_l = blendshapes.get("eyeBlinkLeft", 0.0)
+                blink_r = blendshapes.get("eyeBlinkRight", 0.0)
+                avg_blink = (blink_l + blink_r) / 2.0
+
+                if self.dashboard and hasattr(self.dashboard, "cursor_tracker"):
+                    tracker = self.dashboard.cursor_tracker
+                    if tracker.blink_detector and tracker.blink_detector.update(avg_blink, event.timestamp):
+                        logger.info("Double-blink detected! Dispatching Windows Left Click.")
+                        import os
+                        if not self.args.dry_run and os.name == "nt":
+                            try:
+                                import ctypes
+                                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+                            except Exception as e:
+                                logger.error(f"Error dispatching mouse click: {e}")
+                        self.dashboard.update_telemetry("blink_click", {"timestamp": event.timestamp})
 
             elif event.signal_type == SignalType.AUDIO_POP:
                 intents.append(Intent(action="pop", value=1.0, source="audio"))
@@ -283,6 +305,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--angle-range-x", type=float, default=12.0, help="Head yaw degrees for full screen width (smaller=more sensitive)")
     parser.add_argument("--angle-range-y", type=float, default=9.0, help="Head pitch degrees for full screen height (smaller=more sensitive)")
     parser.add_argument("--deadzone", type=float, default=2.0, help="Head pose deadzone in degrees (suppress micro-jitter)")
+    parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True, help="Invert X axis for mirror webcam (default: True)")
+    parser.add_argument("--enable-blink-click", action=argparse.BooleanOptionalAction, default=True, help="Enable double-blink left click (default: True)")
     return parser.parse_args()
 
 

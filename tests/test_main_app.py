@@ -27,6 +27,7 @@ def _process_state(monkeypatch):
     """main() installs signal handlers and a lock; keep each test's changes from leaking."""
     old = {s: signal.getsignal(s) for s in (signal.SIGINT, signal.SIGTERM)}
     monkeypatch.setattr(app, "SINGLE_INSTANCE_NAME", f"omnitest-{uuid.uuid4().hex}")
+    monkeypatch.setattr(app, "_load_live_sources", lambda *a, **kw: [])
     yield
     for s, h in old.items():
         signal.signal(s, h)

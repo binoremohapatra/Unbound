@@ -90,6 +90,10 @@ class HandsfreeEngine:
                 pass
 
         def on_heartbeat():
+            if self.state_machine.current_state == SystemState.PAUSED:
+                self.state_machine.transition_to(SystemState.ACTIVE)
+                if self.dashboard:
+                    self.dashboard.update_telemetry("state", "active")
             self.watchdog.beat()
 
         if self.args.replay:
@@ -184,21 +188,19 @@ class HandsfreeEngine:
                 if self.dashboard:
                     self.dashboard.update_telemetry("pose", {"yaw": yaw, "pitch": pitch, "roll": roll})
                     if hasattr(self.dashboard, "cursor_tracker"):
-                        cursor_pos, (dx, dy) = self.dashboard.cursor_tracker.process_head_pose(
+                        dx, dy, (cx, cy), dwell_status = self.dashboard.cursor_tracker.process_head_pose(
                             yaw, pitch, event.timestamp
                         )
-                        dwell_status = self.dashboard.cursor_tracker.process_dwell(
-                            cursor_pos[0], cursor_pos[1], event.timestamp
-                        )
                         self.dashboard.update_telemetry("cursor", {
-                            "x": cursor_pos[0], "y": cursor_pos[1], "dx": dx, "dy": dy
+                            "x": cx, "y": cy, "dx": dx, "dy": dy
                         })
-                        self.dashboard.update_telemetry("dwell", {
-                            "state": dwell_status.state.value,
-                            "progress": dwell_status.progress,
-                            "action": dwell_status.action.value,
-                            "dragging": dwell_status.is_dragging,
-                        })
+                        if dwell_status:
+                            self.dashboard.update_telemetry("dwell", {
+                                "state": dwell_status.state.value,
+                                "progress": dwell_status.progress,
+                                "action": dwell_status.action.value,
+                                "dragging": dwell_status.is_dragging,
+                            })
 
             elif event.signal_type == SignalType.BLENDSHAPE:
                 intents.extend(self.slowpath.process_blendshapes(event.value, event.timestamp))
@@ -245,7 +247,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-dashboard", action="store_true", help="Disable web HUD dashboard server")
     parser.add_argument("--dashboard-host", type=str, default="127.0.0.1", help="Dashboard host IP")
     parser.add_argument("--dashboard-port", type=int, default=8080, help="Dashboard port")
-    parser.add_argument("--watchdog-timeout", type=float, default=0.35, help="Safety heartbeat timeout in seconds")
+    parser.add_argument("--watchdog-timeout", type=float, default=0.75, help="Safety heartbeat timeout in seconds")
     return parser.parse_args()
 
 

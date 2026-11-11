@@ -87,6 +87,9 @@ class WebcamAdapter:
         return None
 
     def _capture_loop(self) -> None:
+        if self.on_heartbeat:
+            self.on_heartbeat()
+
         if not HAS_CV2:
             logger.warning("OpenCV not installed. Running webcam adapter in mock mode.")
             self._run_mock_loop()

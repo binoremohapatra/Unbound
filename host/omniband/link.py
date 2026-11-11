@@ -202,7 +202,7 @@ class Arbiter:
 
     # ------------------------------------------------------------- failover
     def _pick_tx(self):
-        now = time.monotonic() * 1000.0
+        now = time.perf_counter() * 1000.0
         best, best_age = None, None
         for i, t in enumerate(self.transports):
             if not t.is_open():

@@ -46,7 +46,7 @@ actually executed; results in `docs/WALKTHROUGH.md` §8 and this file's
 
 ## Cross-cutting verification actually run
 
-- `python -m pytest tests/ -q` → **601 passed, 5 skipped** (21.4 s)
+- `python -m pytest tests/ -q` → **606 passed, 5 skipped** (22 s)
 - `python tools/run_native_tests.py` → **88 checks, 0 failures**; 16 vectors
 - `python tools/gen_constants.py --check` → up to date
 - `python tools/audit_no_placeholders.py` → clean
@@ -55,6 +55,7 @@ actually executed; results in `docs/WALKTHROUGH.md` §8 and this file's
 - `python tools/omniband_ping.py --simulate --count 10` → 10/10 pong,
   tele ~28.8/s
 - `arduino-cli compile --fqbn esp32:esp32:esp32` → success (1141540 B)
+- `python -m pytest tests/test_contrast.py -q` → WCAG ratios verified
 
 ## Not proven (requires hardware — see BRINGUP_CHECKLIST.md)
 

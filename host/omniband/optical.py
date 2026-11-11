@@ -88,7 +88,7 @@ class OpticalSource:
             self._adapter = None
 
     def _on_heartbeat(self) -> None:
-        self.last_event_t = time.monotonic()
+        self.last_event_t = time.perf_counter()
 
     # ------------------------------------------------------------- decode
     def _on_signal(self, ev) -> None:
@@ -102,7 +102,7 @@ class OpticalSource:
         except Exception:  # noqa: BLE001
             return
         self.frames += 1
-        now = time.monotonic()
+        now = time.perf_counter()
         with self._lock:
             self._decode_jaw(jaw, now)
 

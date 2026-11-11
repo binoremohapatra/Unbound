@@ -272,9 +272,9 @@ class SimDevice:
         self._thread.start()
 
     def _run(self) -> None:
-        last = time.monotonic()
+        last = time.perf_counter()
         while not self._stop.is_set():
-            now = time.monotonic()
+            now = time.perf_counter()
             dt = int((now - last) * 1000)
             last = now
             if 0 < dt <= 50:

@@ -32,7 +32,7 @@ WD = K["watchdogs"]
 
 @dataclass
 class EngineStats:
-    t0: float = field(default_factory=time.monotonic)
+    t0: float = field(default_factory=time.perf_counter)
     lines: int = 0
     evts: int = 0
     ges: int = 0
@@ -84,14 +84,14 @@ class OmniEngine:
     # ------------------------------------------------------------- public API
     def run(self, duration_s: Optional[float] = None) -> None:
         self._running = True
-        t0 = time.monotonic()
+        t0 = time.perf_counter()
         log.info("engine running (mode=%d, sink=%s)", self.mode,
                  type(self.sink).__name__)
         try:
             while self._running:
                 self.tick()
                 if duration_s is not None and \
-                        time.monotonic() - t0 >= duration_s:
+                        time.perf_counter() - t0 >= duration_s:
                     break
                 time.sleep(0.005)
         finally:
@@ -102,7 +102,7 @@ class OmniEngine:
 
     def tick(self) -> None:
         """One engine iteration: link IO, dispatch, watchdogs, keepalive."""
-        now = time.monotonic()
+        now = time.perf_counter()
         now_ms = now * 1000.0
         self.arbiter.poll(now_ms)
         self._watchdogs(now, now_ms)
@@ -133,7 +133,7 @@ class OmniEngine:
     def _on_device_line(self, obj: dict) -> None:
         k = obj.get("k")
         self.stats.lines += 1
-        self._last_line_ms = time.monotonic() * 1000.0
+        self._last_line_ms = time.perf_counter() * 1000.0
         self.on_event("line", {"k": k})
         if k == "tele":
             self._on_tele(obj)
@@ -147,7 +147,7 @@ class OmniEngine:
             th = obj.get("th")
             sent = self._pong_wait.pop(th, None)
             if sent is not None:
-                rtt = (time.monotonic() * 1000.0) - sent
+                rtt = (time.perf_counter() * 1000.0) - sent
                 log.debug("pong th=%s rtt=%.1f ms", th, rtt)
                 self.on_event("pong", {"th": th, "rtt_ms": rtt})
         elif k == "cal":
@@ -192,7 +192,7 @@ class OmniEngine:
         g = str(obj.get("g", ""))
         self.stats.ges += 1
         self.stats.last_ges = g
-        self.stats.last_ges_t = time.monotonic()
+        self.stats.last_ges_t = time.perf_counter()
         log.info("ges %s a=%s d=%s m=%s", g, obj.get("a"), obj.get("d"),
                  obj.get("m"))
         self.on_event("ges", dict(obj))
@@ -224,7 +224,7 @@ class OmniEngine:
         if g in INFO_GESTURES:
             return
         # regular gesture -> routed actions for the active mode
-        now = time.monotonic()
+        now = time.perf_counter()
         cmds = self.router.commands_for(g, now)
         if cmds:
             self.sink.apply(cmds)
@@ -283,11 +283,11 @@ class OmniEngine:
         if self.siren is not None:
             self.siren.ring()
         if self.tts is not None:
-            self.tts.say(what, "alarm", time.monotonic())
+            self.tts.say(what, "alarm", time.perf_counter())
 
     def _maybe_tts(self, text: str, key: str, kind: str) -> None:
         if self.tts is not None:
-            self.tts.say(text, key, time.monotonic())
+            self.tts.say(text, key, time.perf_counter())
 
     def _log_bruxism(self, obj: dict) -> None:
         """Append bruxism events to CSV (host-side; device has no storage)."""
@@ -308,7 +308,7 @@ class OmniEngine:
     def send(self, line: str) -> bool:
         ok = self.arbiter.send(line)
         if ok:
-            self._last_tx_ms = time.monotonic() * 1000.0
+            self._last_tx_ms = time.perf_counter() * 1000.0
         return ok
 
     def request_cal(self) -> None:

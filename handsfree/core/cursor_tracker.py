@@ -228,16 +228,16 @@ class CursorTracker:
         self,
         sensitivity_x: float = 35.0,
         sensitivity_y: float = 30.0,
-        curve_exponent: float = 1.4,
-        deadzone_deg: float = 1.5,
+        curve_exponent: float = 1.8,
+        deadzone_deg: float = 2.5,
         screen_width: int = 1920,
         screen_height: int = 1080,
         invert_x: bool = True,
         invert_y: bool = False,
         enable_dwell: bool = True,
         dwell_time_ms: float = 650.0,
-        angle_range_x: float = 14.0,
-        angle_range_y: float = 10.0,
+        angle_range_x: float = 20.0,
+        angle_range_y: float = 15.0,
         auto_calibrate: bool = False,
         enable_blink: bool = True,
         on_double_blink: Optional[Callable[[], None]] = None,
@@ -249,7 +249,7 @@ class CursorTracker:
         self.deadzone_deg = deadzone_deg
 
         # Absolute mapping: head angle range that spans full screen.
-        # e.g. angle_range_x=14 means tilting head 14° left/right reaches screen edges comfortably.
+        # e.g. angle_range_x=20 means tilting head 20° left/right reaches screen edges comfortably.
         self.angle_range_x = max(1.0, angle_range_x)
         self.angle_range_y = max(1.0, angle_range_y)
 
@@ -282,9 +282,9 @@ class CursorTracker:
         self._calib_samples: list[Tuple[float, float]] = []
         self._calib_target_samples = 20
 
-        # One-Euro filters for jitter suppression
-        self.filter_yaw = OneEuroFilter(freq=60.0, min_cutoff=0.8, beta=0.008)
-        self.filter_pitch = OneEuroFilter(freq=60.0, min_cutoff=0.8, beta=0.008)
+        # One-Euro filters with aggressive standstill smoothing (min_cutoff=0.15)
+        self.filter_yaw = OneEuroFilter(freq=60.0, min_cutoff=0.15, beta=0.006)
+        self.filter_pitch = OneEuroFilter(freq=60.0, min_cutoff=0.15, beta=0.006)
 
         # Dwell clicker integration
         self.dwell_clicker: Optional[DwellClicker] = (
@@ -379,11 +379,34 @@ class CursorTracker:
         norm_x = max(0.0, min(1.0, norm_x))
         norm_y = max(0.0, min(1.0, norm_y))
 
-        new_x = norm_x * float(self.screen_width - 1)
-        new_y = norm_y * float(self.screen_height - 1)
+        target_x = norm_x * float(self.screen_width - 1)
+        target_y = norm_y * float(self.screen_height - 1)
 
         prev_x = self.cursor_x
         prev_y = self.cursor_y
+
+        # Velocity-weighted adaptive screen-space dampening & tremor elimination
+        dist = math.hypot(target_x - prev_x, target_y - prev_y)
+        if dist < 2.5:
+            # Stiff / stationary head: freeze micro-tremor completely
+            new_x = prev_x
+            new_y = prev_y
+        elif dist < 20.0:
+            # Fine aiming: heavy low-pass dampening for razor-sharp precision
+            alpha = 0.18
+            new_x = prev_x + (target_x - prev_x) * alpha
+            new_y = prev_y + (target_y - prev_y) * alpha
+        elif dist < 80.0:
+            # Normal movement: silky smooth progressive transition
+            alpha = 0.40
+            new_x = prev_x + (target_x - prev_x) * alpha
+            new_y = prev_y + (target_y - prev_y) * alpha
+        else:
+            # Fast flick: responsive tracking without perceptible lag
+            alpha = 0.70
+            new_x = prev_x + (target_x - prev_x) * alpha
+            new_y = prev_y + (target_y - prev_y) * alpha
+
         self.cursor_x = new_x
         self.cursor_y = new_y
 

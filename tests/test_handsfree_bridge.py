@@ -227,9 +227,17 @@ def test_hf_source_flags_mock_when_mediapipe_missing(monkeypatch):
 
 
 def test_hf_source_flags_mock_when_camera_cannot_open(monkeypatch):
-    import cv2
+    try:
+        import cv2
+    except ImportError:
+        import types
+        cv2 = types.ModuleType("cv2")
+        cv2.CAP_PROP_FRAME_WIDTH = 3
+        cv2.CAP_PROP_FRAME_HEIGHT = 4
+        monkeypatch.setitem(sys.modules, "cv2", cv2)
 
     import handsfree.adapters.webcam as w
+    monkeypatch.setattr(w, "cv2", cv2, raising=False)
     monkeypatch.setattr(w, "HAS_CV2", True)
     monkeypatch.setattr(w, "HAS_MEDIAPIPE", True)
 
@@ -246,7 +254,7 @@ def test_hf_source_flags_mock_when_camera_cannot_open(monkeypatch):
         def release(self):
             pass
 
-    monkeypatch.setattr(cv2, "VideoCapture", lambda *a, **k: _DeadCap())
+    monkeypatch.setattr(cv2, "VideoCapture", lambda *a, **k: _DeadCap(), raising=False)
     src = app._HFSource("webcam")
     try:
         assert src.is_mock is True and "camera" in src.mock_reason

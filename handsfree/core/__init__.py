@@ -9,6 +9,9 @@ from handsfree.core.state_machine import StateMachine, SystemState
 from handsfree.core.mapping import ProfileMapper, OutputCommand
 from handsfree.core.gateway import OutputGateway
 from handsfree.core.watchdog import Watchdog
+from handsfree.core.cursor_tracker import CursorTracker, DwellClicker, DwellAction, DwellState, DwellStatus
+from handsfree.core.vgamepad_gateway import VirtualGamepad, X360Button
+from handsfree.core.osk_engine import OnScreenKeyboardEngine, WordPredictor, KEYBOARD_LAYOUT, KeyDef
 
 __all__ = [
     "SignalEvent",
@@ -27,5 +30,15 @@ __all__ = [
     "OutputCommand",
     "OutputGateway",
     "Watchdog",
+    "CursorTracker",
+    "DwellClicker",
+    "DwellAction",
+    "DwellState",
+    "DwellStatus",
+    "VirtualGamepad",
+    "X360Button",
+    "OnScreenKeyboardEngine",
+    "WordPredictor",
+    "KEYBOARD_LAYOUT",
+    "KeyDef",
 ]
-

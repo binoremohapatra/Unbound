@@ -3,18 +3,22 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Handsfree Live HUD</title>
+  <title>Handsfree HUD & OptiKey OSK</title>
   <style>
     :root {
-      --bg: #0f172a;
-      --card-bg: #1e293b;
+      --bg: #090d16;
+      --card-bg: #131c2e;
       --accent: #38bdf8;
+      --accent-hover: #0284c7;
       --success: #22c55e;
       --warning: #f59e0b;
       --danger: #ef4444;
       --text: #f8fafc;
       --muted: #94a3b8;
-      --border: #334155;
+      --border: #1e293b;
+      --key-bg: #1e293b;
+      --key-hover: #334155;
+      --dwell-fill: rgba(56, 189, 248, 0.4);
     }
 
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -23,16 +27,38 @@
       background: var(--bg);
       color: var(--text);
       min-height: 100vh;
-      padding: 1.5rem;
+      padding: 1.25rem;
     }
 
     header {
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 1.5rem;
-      padding-bottom: 1rem;
+      margin-bottom: 1.25rem;
+      padding-bottom: 0.75rem;
       border-bottom: 1px solid var(--border);
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .brand h1 {
+      font-size: 1.4rem;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+    }
+
+    .badge-sub {
+      background: #1e293b;
+      color: var(--accent);
+      padding: 0.2rem 0.5rem;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      font-weight: 600;
+      text-transform: uppercase;
     }
 
     .status-badge {
@@ -41,8 +67,9 @@
       gap: 0.5rem;
       padding: 0.35rem 0.75rem;
       border-radius: 9999px;
-      font-size: 0.875rem;
-      background: #334155;
+      font-size: 0.85rem;
+      background: var(--card-bg);
+      border: 1px solid var(--border);
     }
 
     .dot {
@@ -53,10 +80,20 @@
     }
     .dot.connected { background: var(--success); }
 
-    .grid {
+    .main-layout {
       display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
-      gap: 1.5rem;
+      grid-template-columns: 340px 1fr;
+      gap: 1.25rem;
+    }
+
+    @media (max-width: 1024px) {
+      .main-layout { grid-template-columns: 1fr; }
+    }
+
+    .sidebar {
+      display: flex;
+      flex-direction: column;
+      gap: 1.25rem;
     }
 
     .card {
@@ -64,17 +101,21 @@
       border: 1px solid var(--border);
       border-radius: 12px;
       padding: 1.25rem;
-      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2);
+      box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.3);
     }
 
     .card h2 {
-      font-size: 1.1rem;
+      font-size: 0.95rem;
       color: var(--muted);
       margin-bottom: 1rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
 
+    /* Joystick preview canvas */
     .stick-container {
       display: flex;
       flex-direction: column;
@@ -83,11 +124,12 @@
     }
 
     canvas#stickCanvas {
-      background: #0f172a;
+      background: #090d16;
       border-radius: 50%;
       border: 2px solid var(--border);
     }
 
+    /* Meters */
     .meter-group {
       display: flex;
       flex-direction: column;
@@ -98,20 +140,20 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 1rem;
+      gap: 0.75rem;
     }
 
     .meter-label {
-      width: 110px;
-      font-size: 0.9rem;
+      width: 100px;
+      font-size: 0.85rem;
       color: var(--muted);
     }
 
     .meter-bar {
       flex: 1;
-      height: 10px;
-      background: #0f172a;
-      border-radius: 5px;
+      height: 8px;
+      background: #090d16;
+      border-radius: 4px;
       overflow: hidden;
     }
 
@@ -123,119 +165,337 @@
     }
 
     .meter-value {
-      width: 50px;
+      width: 45px;
       text-align: right;
       font-family: monospace;
-      font-size: 0.9rem;
+      font-size: 0.85rem;
     }
 
+    /* Tracky Mouse Dwell Controls */
+    .dwell-modes {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 0.5rem;
+      margin-top: 0.5rem;
+    }
+
+    .dwell-btn {
+      background: var(--key-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      padding: 0.5rem;
+      border-radius: 8px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.15s ease;
+      text-align: center;
+    }
+
+    .dwell-btn:hover, .dwell-btn.active {
+      background: var(--accent);
+      color: #090d16;
+      border-color: var(--accent);
+    }
+
+    .dwell-circle-wrap {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      margin: 1rem 0;
+    }
+
+    .dwell-circle {
+      position: relative;
+      width: 70px;
+      height: 70px;
+      border-radius: 50%;
+      background: conic-gradient(var(--accent) var(--dwell-deg, 0deg), #1e293b 0deg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
+    }
+
+    .dwell-circle-inner {
+      width: 52px;
+      height: 52px;
+      border-radius: 50%;
+      background: var(--card-bg);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 0.8rem;
+      font-weight: 700;
+      font-family: monospace;
+    }
+
+    /* OptiKey On-Screen Keyboard Section */
+    .osk-section {
+      display: flex;
+      flex-direction: column;
+      gap: 1rem;
+    }
+
+    .osk-display {
+      background: #090d16;
+      border: 2px solid var(--border);
+      border-radius: 10px;
+      padding: 1rem;
+      min-height: 80px;
+      font-size: 1.3rem;
+      font-family: monospace;
+      color: #fff;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+    }
+
+    .cursor-blink {
+      display: inline-block;
+      width: 3px;
+      height: 1.3rem;
+      background: var(--accent);
+      animation: blink 1s infinite;
+      margin-left: 4px;
+      vertical-align: middle;
+    }
+
+    @keyframes blink {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0; }
+    }
+
+    /* Word Prediction Bar (OptiKey) */
+    .prediction-bar {
+      display: flex;
+      gap: 0.5rem;
+      overflow-x: auto;
+      padding-bottom: 0.25rem;
+    }
+
+    .predict-chip {
+      background: #1e293b;
+      border: 1px solid var(--accent);
+      color: var(--accent);
+      padding: 0.5rem 1rem;
+      border-radius: 8px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      cursor: pointer;
+      position: relative;
+      overflow: hidden;
+      flex: 1;
+      text-align: center;
+      transition: background 0.15s;
+    }
+
+    .predict-chip:hover {
+      background: var(--accent);
+      color: #090d16;
+    }
+
+    /* Virtual Keyboard Grid */
+    .keyboard-container {
+      display: flex;
+      flex-direction: column;
+      gap: 0.45rem;
+      background: #090d16;
+      padding: 1rem;
+      border-radius: 12px;
+      border: 1px solid var(--border);
+    }
+
+    .keyboard-row {
+      display: flex;
+      gap: 0.45rem;
+      width: 100%;
+    }
+
+    .osk-key {
+      position: relative;
+      background: var(--key-bg);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      height: 52px;
+      font-size: 1rem;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      cursor: pointer;
+      user-select: none;
+      overflow: hidden;
+      transition: border-color 0.15s, transform 0.05s;
+    }
+
+    .osk-key:hover {
+      border-color: var(--accent);
+      background: var(--key-hover);
+    }
+
+    .osk-key:active {
+      transform: scale(0.97);
+    }
+
+    .osk-key .dwell-fill-bar {
+      position: absolute;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: 0%;
+      background: var(--dwell-fill);
+      transition: height 0.05s linear;
+      pointer-events: none;
+    }
+
+    .osk-key.action-speak { background: #1e3a5f; color: #38bdf8; }
+    .osk-key.action-send { background: #14532d; color: #4ade80; }
+    .osk-key.action-clear { background: #451a1a; color: #f87171; }
+    .osk-key.action-bksp { background: #3b2a1a; color: #fbbf24; }
+
+    /* Action pills */
     .pill-container {
       display: flex;
       flex-wrap: wrap;
-      gap: 0.5rem;
-      min-height: 48px;
+      gap: 0.4rem;
     }
 
     .pill {
-      padding: 0.4rem 0.8rem;
-      border-radius: 8px;
-      background: #0f172a;
+      padding: 0.35rem 0.65rem;
+      border-radius: 6px;
+      background: #090d16;
       border: 1px solid var(--border);
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       font-weight: 600;
       color: var(--muted);
-      transition: all 0.1s ease;
     }
 
     .pill.active {
       background: var(--accent);
-      color: #0f172a;
+      color: #090d16;
       border-color: var(--accent);
       box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
     }
 
-    .indicator-grid {
-      display: grid;
-      grid-template-columns: 1fr 1fr;
-      gap: 1rem;
-      margin-top: 1rem;
-    }
-
-    .indicator-box {
-      background: #0f172a;
+    .btn-secondary {
+      background: #1e293b;
+      color: var(--text);
       border: 1px solid var(--border);
-      padding: 0.75rem;
-      border-radius: 8px;
-      text-align: center;
+      padding: 0.4rem 0.8rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 600;
+      cursor: pointer;
     }
-
-    .indicator-box.active {
-      border-color: var(--warning);
-      color: var(--warning);
-    }
+    .btn-secondary:hover { background: #334155; }
   </style>
 </head>
 <body>
   <header>
-    <h1>Handsfree Telemetry HUD</h1>
+    <div class="brand">
+      <h1>Unbound Handsfree HUD</h1>
+      <span class="badge-sub">Gameface • Tracky • OptiKey</span>
+    </div>
     <div class="status-badge">
       <div id="statusDot" class="dot"></div>
-      <span id="statusText">Disconnected</span>
+      <span id="statusText">Connecting...</span>
     </div>
   </header>
 
-  <main class="grid">
-    <div class="card stick-container">
-      <h2>Analog Stick Vector</h2>
-      <canvas id="stickCanvas" width="220" height="220"></canvas>
-      <div class="meter-value" id="stickCoords" style="width: auto;">X: 0.00 | Y: 0.00</div>
-    </div>
+  <div class="main-layout">
+    <!-- Left Sidebar: Vision, Pose & Dwell Telemetry -->
+    <div class="sidebar">
+      <!-- Analog Stick & Aim Canvas -->
+      <div class="card stick-container">
+        <h2>
+          <span>Head Tracking Stick</span>
+          <button class="btn-secondary" id="recenterBtn">Recenter</button>
+        </h2>
+        <canvas id="stickCanvas" width="180" height="180"></canvas>
+        <div class="meter-value" id="stickCoords" style="width: auto; font-size: 0.85rem;">X: 0.00 | Y: 0.00</div>
+      </div>
 
-    <div class="card">
-      <h2>Head Pose Orientation</h2>
-      <div class="meter-group">
-        <div class="meter-row">
-          <span class="meter-label">Yaw (Steer)</span>
-          <div class="meter-bar"><div id="yawBar" class="meter-fill"></div></div>
-          <span class="meter-value" id="yawVal">0.0°</span>
+      <!-- Tracky Mouse Dwell Clicker Panel -->
+      <div class="card">
+        <h2>Tracky Mouse Dwell Clicker</h2>
+        <div class="dwell-circle-wrap">
+          <div class="dwell-circle" id="dwellCircle">
+            <div class="dwell-circle-inner" id="dwellPercent">0%</div>
+          </div>
         </div>
-        <div class="meter-row">
-          <span class="meter-label">Pitch (Aim)</span>
-          <div class="meter-bar"><div id="pitchBar" class="meter-fill"></div></div>
-          <span class="meter-value" id="pitchVal">0.0°</span>
-        </div>
-        <div class="meter-row">
-          <span class="meter-label">Roll (Tilt)</span>
-          <div class="meter-bar"><div id="rollBar" class="meter-fill"></div></div>
-          <span class="meter-value" id="rollVal">0.0°</span>
+        <div class="dwell-modes">
+          <button class="dwell-btn active" data-action="left_click">Left Click</button>
+          <button class="dwell-btn" data-action="right_click">Right Click</button>
+          <button class="dwell-btn" data-action="double_click">Double Click</button>
+          <button class="dwell-btn" data-action="drag_toggle">Drag / Drop</button>
         </div>
       </div>
 
-      <div class="indicator-grid">
-        <div class="indicator-box" id="popIndicator">Mouth Pop</div>
-        <div class="indicator-box" id="speechIndicator">Speech Active</div>
+      <!-- Head Pose Angles -->
+      <div class="card">
+        <h2>Orientation & Acoustics</h2>
+        <div class="meter-group">
+          <div class="meter-row">
+            <span class="meter-label">Yaw (Steer)</span>
+            <div class="meter-bar"><div id="yawBar" class="meter-fill"></div></div>
+            <span class="meter-value" id="yawVal">0.0°</span>
+          </div>
+          <div class="meter-row">
+            <span class="meter-label">Pitch (Aim)</span>
+            <div class="meter-bar"><div id="pitchBar" class="meter-fill"></div></div>
+            <span class="meter-value" id="pitchVal">0.0°</span>
+          </div>
+          <div class="meter-row">
+            <span class="meter-label">Roll (Tilt)</span>
+            <div class="meter-bar"><div id="rollBar" class="meter-fill"></div></div>
+            <span class="meter-value" id="rollVal">0.0°</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Active Gamepad Buttons -->
+      <div class="card">
+        <h2>Controller State</h2>
+        <div class="pill-container" id="buttonList">
+          <span class="pill" data-key="A">A</span>
+          <span class="pill" data-key="B">B</span>
+          <span class="pill" data-key="X">X</span>
+          <span class="pill" data-key="Y">Y</span>
+          <span class="pill" data-key="LB">LB</span>
+          <span class="pill" data-key="RB">RB</span>
+          <span class="pill" data-key="START">START</span>
+        </div>
       </div>
     </div>
 
-    <div class="card">
-      <h2>Blendshape Activation</h2>
-      <div class="meter-group" id="blendshapeList"></div>
-    </div>
+    <!-- Right: OptiKey Accessible On-Screen Keyboard -->
+    <div class="card osk-section">
+      <h2>
+        <span>OptiKey On-Screen Keyboard</span>
+        <span style="font-size: 0.8rem; color: var(--accent);">Dwell-to-Type Active</span>
+      </h2>
 
-    <div class="card">
-      <h2>Active Output Buttons</h2>
-      <div class="pill-container" id="buttonList">
-        <span class="pill" data-key="A">A</span>
-        <span class="pill" data-key="B">B</span>
-        <span class="pill" data-key="X">X</span>
-        <span class="pill" data-key="Y">Y</span>
-        <span class="pill" data-key="LB">LB</span>
-        <span class="pill" data-key="RB">RB</span>
-        <span class="pill" data-key="START">START</span>
+      <!-- Typed Text Buffer -->
+      <div class="osk-display">
+        <span id="typedText">Type with head dwelling or clicks...</span>
+        <span class="cursor-blink"></span>
       </div>
-      <div style="margin-top: 1.5rem;">
-        <span style="color: var(--muted); font-size: 0.85rem;">System State: </span>
-        <strong id="systemState">ACTIVE</strong>
+
+      <!-- OptiKey Word Prediction Bar -->
+      <div class="prediction-bar" id="predictionBar">
+        <div class="predict-chip" data-word="hello">hello</div>
+        <div class="predict-chip" data-word="help">help</div>
+        <div class="predict-chip" data-word="handsfree">handsfree</div>
+        <div class="predict-chip" data-word="yes">yes</div>
+        <div class="predict-chip" data-word="thank you">thank you</div>
+      </div>
+
+      <!-- QWERTY Keyboard Layout -->
+      <div class="keyboard-container" id="virtualKeyboard">
+        <!-- Rendered dynamically -->
       </div>
     </div>
 
@@ -265,10 +525,10 @@
   </main>
 
   <script>
-    const canvas = document.getElementById('stickCanvas');
-    const ctx = canvas.getContext('2d');
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
+    const stickCanvas = document.getElementById('stickCanvas');
+    const stickCtx = stickCanvas.getContext('2d');
     const stickCoords = document.getElementById('stickCoords');
     const yawBar = document.getElementById('yawBar');
     const pitchBar = document.getElementById('pitchBar');
@@ -276,42 +536,163 @@
     const yawVal = document.getElementById('yawVal');
     const pitchVal = document.getElementById('pitchVal');
     const rollVal = document.getElementById('rollVal');
-    const popInd = document.getElementById('popIndicator');
-    const speechInd = document.getElementById('speechIndicator');
-    const blendshapeList = document.getElementById('blendshapeList');
-    const systemState = document.getElementById('systemState');
+    const dwellCircle = document.getElementById('dwellCircle');
+    const dwellPercent = document.getElementById('dwellPercent');
+    const typedText = document.getElementById('typedText');
+    const predictionBar = document.getElementById('predictionBar');
+    const virtualKeyboard = document.getElementById('virtualKeyboard');
+    const recenterBtn = document.getElementById('recenterBtn');
+
+    let ws = null;
+    let currentPose = { yaw: 0, pitch: 0, roll: 0 };
+    let currentDwellAction = 'left_click';
+
+    // Standard OptiKey Layout
+    const LAYOUT = [
+      [
+        {label: "1"}, {label: "2"}, {label: "3"}, {label: "4"}, {label: "5"},
+        {label: "6"}, {label: "7"}, {label: "8"}, {label: "9"}, {label: "0"},
+        {label: "BKSP", type: "bksp", width: 1.5}
+      ],
+      [
+        {label: "Q"}, {label: "W"}, {label: "E"}, {label: "R"}, {label: "T"},
+        {label: "Y"}, {label: "U"}, {label: "I"}, {label: "O"}, {label: "P"}
+      ],
+      [
+        {label: "A"}, {label: "S"}, {label: "D"}, {label: "F"}, {label: "G"},
+        {label: "H"}, {label: "J"}, {label: "K"}, {label: "L"},
+        {label: "ENTER", type: "enter", width: 1.5}
+      ],
+      [
+        {label: "Z"}, {label: "X"}, {label: "C"}, {label: "V"}, {label: "B"},
+        {label: "N"}, {label: "M"}, {label: ","}, {label: "."},
+        {label: "CLEAR", type: "clear", width: 1.5}
+      ],
+      [
+        {label: "SPEAK", type: "speak", width: 2.0},
+        {label: "SPACE", type: "space", width: 4.5},
+        {label: "SEND TO APP", type: "send", width: 2.5}
+      ]
+    ];
+
+    function renderKeyboard() {
+      virtualKeyboard.innerHTML = '';
+      LAYOUT.forEach(row => {
+        const rowEl = document.createElement('div');
+        rowEl.className = 'keyboard-row';
+
+        row.forEach(key => {
+          const keyEl = document.createElement('div');
+          keyEl.className = `osk-key ${key.type ? 'action-' + key.type : ''}`;
+          keyEl.style.flex = key.width || 1.0;
+          keyEl.dataset.key = key.label;
+
+          const textEl = document.createElement('span');
+          textEl.textContent = key.label;
+
+          const fillEl = document.createElement('div');
+          fillEl.className = 'dwell-fill-bar';
+
+          keyEl.appendChild(textEl);
+          keyEl.appendChild(fillEl);
+
+          // Click or Dwell trigger
+          keyEl.addEventListener('click', () => {
+            sendWS({ type: "osk_key", key: key.label });
+          });
+
+          // Mouse/Head dwell hover simulation
+          let hoverTimer = null;
+          let startTime = 0;
+          const DWELL_MS = 550;
+
+          keyEl.addEventListener('mouseenter', () => {
+            startTime = performance.now();
+            sendWS({ type: "osk_hover", key: key.label });
+
+            hoverTimer = setInterval(() => {
+              const elapsed = performance.now() - startTime;
+              const prog = Math.min(1.0, elapsed / DWELL_MS);
+              fillEl.style.height = `${prog * 100}%`;
+
+              if (prog >= 1.0) {
+                clearInterval(hoverTimer);
+                hoverTimer = null;
+                fillEl.style.height = '0%';
+                sendWS({ type: "osk_key", key: key.label });
+              }
+            }, 30);
+          });
+
+          keyEl.addEventListener('mouseleave', () => {
+            if (hoverTimer) {
+              clearInterval(hoverTimer);
+              hoverTimer = null;
+            }
+            fillEl.style.height = '0%';
+            sendWS({ type: "osk_hover", key: null });
+          });
+
+          rowEl.appendChild(keyEl);
+        });
+
+        virtualKeyboard.appendChild(rowEl);
+      });
+    }
+
+    renderKeyboard();
 
     function drawStick(x, y) {
-      const cx = canvas.width / 2;
-      const cy = canvas.height / 2;
-      const r = cx - 15;
+      const cx = stickCanvas.width / 2;
+      const cy = stickCanvas.height / 2;
+      const r = cx - 12;
 
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      stickCtx.clearRect(0, 0, stickCanvas.width, stickCanvas.height);
 
-      ctx.strokeStyle = '#1e293b';
-      ctx.lineWidth = 2;
-      ctx.beginPath();
-      ctx.arc(cx, cy, r * 0.15, 0, Math.PI * 2);
-      ctx.stroke();
+      stickCtx.strokeStyle = '#1e293b';
+      stickCtx.lineWidth = 2;
+      stickCtx.beginPath();
+      stickCtx.arc(cx, cy, r * 0.15, 0, Math.PI * 2);
+      stickCtx.stroke();
 
-      ctx.strokeStyle = '#334155';
-      ctx.beginPath();
-      ctx.arc(cx, cy, r, 0, Math.PI * 2);
-      ctx.stroke();
+      stickCtx.strokeStyle = '#334155';
+      stickCtx.beginPath();
+      stickCtx.arc(cx, cy, r, 0, Math.PI * 2);
+      stickCtx.stroke();
 
       const px = cx + x * r;
       const py = cy + y * r;
 
-      ctx.fillStyle = '#38bdf8';
-      ctx.beginPath();
-      ctx.arc(px, py, 14, 0, Math.PI * 2);
-      ctx.fill();
+      stickCtx.fillStyle = '#38bdf8';
+      stickCtx.beginPath();
+      stickCtx.arc(px, py, 12, 0, Math.PI * 2);
+      stickCtx.fill();
     }
 
     drawStick(0, 0);
 
+    function sendWS(obj) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify(obj));
+      }
+    }
+
+    // Dwell buttons
+    document.querySelectorAll('.dwell-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.dwell-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        currentDwellAction = btn.dataset.action;
+        sendWS({ type: "dwell_action", action: currentDwellAction });
+      });
+    });
+
+    recenterBtn.addEventListener('click', () => {
+      sendWS({ type: "recenter", yaw: currentPose.yaw, pitch: currentPose.pitch });
+    });
+
     function connect() {
-      const ws = new WebSocket(`ws://${window.location.host}/ws`);
+      ws = new WebSocket(`ws://${window.location.host}/ws`);
 
       ws.onopen = () => {
         statusDot.classList.add('connected');
@@ -327,12 +708,15 @@
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
 
+        // Stick
         if (data.stick) {
           drawStick(data.stick.x, data.stick.y);
           stickCoords.textContent = `X: ${data.stick.x.toFixed(2)} | Y: ${data.stick.y.toFixed(2)}`;
         }
 
+        // Pose
         if (data.pose) {
+          currentPose = data.pose;
           yawVal.textContent = `${data.pose.yaw.toFixed(1)}°`;
           pitchVal.textContent = `${data.pose.pitch.toFixed(1)}°`;
           rollVal.textContent = `${data.pose.roll.toFixed(1)}°`;
@@ -342,15 +726,35 @@
           rollBar.style.width = `${Math.min(100, Math.abs(data.pose.roll) * 3)}%`;
         }
 
-        if (data.audio) {
-          popInd.classList.toggle('active', !!data.audio.pop);
-          speechInd.classList.toggle('active', !!data.audio.speech);
+        // Tracky Mouse Dwell progress
+        if (data.dwell) {
+          const prog = data.dwell.progress || 0.0;
+          const deg = Math.round(prog * 360);
+          dwellCircle.style.setProperty('--dwell-deg', `${deg}deg`);
+          dwellPercent.textContent = `${Math.round(prog * 100)}%`;
         }
 
-        if (data.state) {
-          systemState.textContent = data.state.toUpperCase();
+        // OptiKey OSK state
+        if (data.osk) {
+          if (data.osk.text !== undefined) {
+            typedText.textContent = data.osk.text || "Type with head dwelling or clicks...";
+          }
+
+          if (data.osk.predictions) {
+            predictionBar.innerHTML = '';
+            data.osk.predictions.forEach(word => {
+              const chip = document.createElement('div');
+              chip.className = 'predict-chip';
+              chip.textContent = word;
+              chip.addEventListener('click', () => {
+                sendWS({ type: "osk_predict", word: word });
+              });
+              predictionBar.appendChild(chip);
+            });
+          }
         }
 
+        // Gamepad buttons
         if (data.pressed) {
           document.querySelectorAll('.pill').forEach(pill => {
             const k = pill.getAttribute('data-key');
@@ -401,4 +805,3 @@
   </script>
 </body>
 </html>
-

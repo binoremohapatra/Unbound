@@ -36,3 +36,4 @@ class Intent:
     timestamp: float = field(default_factory=time.time)
     metadata: Dict[str, Any] = field(default_factory=dict)
 
+

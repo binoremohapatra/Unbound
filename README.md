@@ -1,6 +1,7 @@
 <div align="center">
 
-# 🎮 OmniControl (Unbound)
+# 
+Unbound
 ### **High-Performance, Safety-Critical Hands-Free Game & Desktop Controller**
 
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg?style=for-the-badge&logo=python&logoColor=white)](https://www.python.org/)

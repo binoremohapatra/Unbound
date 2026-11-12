@@ -19,7 +19,7 @@ import time
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QLabel, QPushButton, QComboBox, QStatusBar, QMessageBox, QApplication,
-    QSystemTrayIcon, QCheckBox
+    QSystemTrayIcon, QCheckBox, QSlider
 )
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QIcon, QFont, QCloseEvent, QImage, QPixmap
@@ -193,11 +193,42 @@ class MainWindow(QMainWindow):
         self._btn_recenter = QPushButton("🎯 Recenter Face (Zero)")
         self._btn_recenter.clicked.connect(lambda: self.webcam_tracker.recenter())
 
-        self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse + Dwell Click")
+        self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse (120Hz Decoupled)")
+        self._chk_head_mouse.setChecked(True)
         self._chk_head_mouse.toggled.connect(lambda chk: setattr(self.webcam_tracker, "head_mouse_enabled", chk))
+
+        # Pointer Speed Slider (0.5x to 3.0x)
+        lbl_speed_title = QLabel("Pointer Speed:")
+        lbl_speed_title.setFont(QFont("Cascadia Code", 9, QFont.Bold))
+        self._slider_speed = QSlider(Qt.Horizontal)
+        self._slider_speed.setRange(5, 30)
+        self._slider_speed.setValue(12)  # 1.2x
+        self._slider_speed.setFixedWidth(110)
+        self._lbl_speed_val = QLabel("1.2x")
+        self._lbl_speed_val.setFont(QFont("Cascadia Code", 9))
+        self._slider_speed.valueChanged.connect(self._on_speed_slider_changed)
+
+        # 1-Euro Smoothing Slider (0.3 to 2.0 Hz)
+        lbl_smooth_title = QLabel("Smoothing (1-Euro):")
+        lbl_smooth_title.setFont(QFont("Cascadia Code", 9, QFont.Bold))
+        self._slider_smooth = QSlider(Qt.Horizontal)
+        self._slider_smooth.setRange(3, 20)
+        self._slider_smooth.setValue(8)  # 0.8 Hz
+        self._slider_smooth.setFixedWidth(110)
+        self._lbl_smooth_val = QLabel("0.8 Hz")
+        self._lbl_smooth_val.setFont(QFont("Cascadia Code", 9))
+        self._slider_smooth.valueChanged.connect(self._on_smooth_slider_changed)
 
         cam_ctrls.addWidget(self._btn_recenter)
         cam_ctrls.addWidget(self._chk_head_mouse)
+        cam_ctrls.addSpacing(12)
+        cam_ctrls.addWidget(lbl_speed_title)
+        cam_ctrls.addWidget(self._slider_speed)
+        cam_ctrls.addWidget(self._lbl_speed_val)
+        cam_ctrls.addSpacing(12)
+        cam_ctrls.addWidget(lbl_smooth_title)
+        cam_ctrls.addWidget(self._slider_smooth)
+        cam_ctrls.addWidget(self._lbl_smooth_val)
         cam_ctrls.addStretch()
         cam_layout.addLayout(cam_ctrls)
 
@@ -206,6 +237,12 @@ class MainWindow(QMainWindow):
         self.camera_lbl.setMinimumSize(480, 360)
         self.camera_lbl.setStyleSheet(f"background: #111; border: 2px solid {BURNT_ORANGE}; border-radius: 6px;")
         cam_layout.addWidget(self.camera_lbl)
+
+        # Biometric Telemetry Bar
+        self._lbl_cam_telemetry = QLabel("FPS: -- | EAR: -- | MAR: -- | YAW: 0.0° | PITCH: 0.0°")
+        self._lbl_cam_telemetry.setFont(QFont("Cascadia Code", 9, QFont.Bold))
+        self._lbl_cam_telemetry.setStyleSheet(f"color: {BURNT_ORANGE}; background: {SURFACE_1}; padding: 4px 8px; border-radius: 4px;")
+        cam_layout.addWidget(self._lbl_cam_telemetry)
 
         self.tabs.addTab(self.scope, "Oscilloscope (Signal)")
         self.tabs.addTab(self.keyboard, "⌨️ Hands-Free Keyboard")
@@ -244,14 +281,25 @@ class MainWindow(QMainWindow):
         self.gw = Gateway(SendInputBackend())
         self.gw.install_exit_handlers()
 
-        # Real Optical Webcam Tracker
+        # Real Optical Webcam Tracker (GameFace 468-point 3D FaceMesh + 1-Euro filter)
         self.webcam_tracker = RealWebcamTracker(
             camera_id=0,
             on_envelopes=self._on_optical_envelopes,
             on_frame=self._on_webcam_frame,
             on_gesture=self._on_optical_gesture,
+            on_click=self._on_biometric_click,
+            on_drag_toggle=self._toggle_drag_lock,
         )
         self.webcam_tracker.start()
+
+        # 120 Hz Decoupled Cursor Interpolation Timer (8 ms tick)
+        self._cursor_timer = QTimer(self)
+        self._cursor_timer.setInterval(8)
+        self._cursor_timer.timeout.connect(self._on_cursor_tick)
+        self._cur_cursor_x: float = 960.0
+        self._cur_cursor_y: float = 540.0
+        self._cursor_initialized: bool = False
+        self._cursor_timer.start()
 
         # Physical Key Poller (F7-F10 + F11 + F12)
         self.key_poller = PhysicalKeyPoller(
@@ -282,8 +330,74 @@ class MainWindow(QMainWindow):
             qimg = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
             pix = QPixmap.fromImage(qimg).scaled(480, 360, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.camera_lbl.setPixmap(pix)
+            # Live Biometric Telemetry update
+            self._lbl_cam_telemetry.setText(
+                f"FPS: {self.webcam_tracker.fps:4.1f} | "
+                f"EAR: {self.webcam_tracker.current_ear:.2f} | "
+                f"MAR: {self.webcam_tracker.current_mar:.2f} | "
+                f"YAW: {self.webcam_tracker.head_yaw:+4.1f}° | "
+                f"PITCH: {self.webcam_tracker.head_pitch:+4.1f}°"
+            )
         except Exception:
             pass
+
+    def _on_cursor_tick(self) -> None:
+        """120 Hz butter-smooth sub-pixel cursor interpolation loop decoupled from 30 FPS camera."""
+        if not self.webcam_tracker.head_mouse_enabled:
+            return
+        if time.perf_counter() < self.webcam_tracker.freeze_until:
+            return
+
+        tgt_x, tgt_y = self.webcam_tracker.target_pos
+        if not self._cursor_initialized:
+            self._cur_cursor_x = tgt_x
+            self._cur_cursor_y = tgt_y
+            self._cursor_initialized = True
+
+        # Exponential sub-pixel approach (120 Hz smoothing step)
+        self._cur_cursor_x += (tgt_x - self._cur_cursor_x) * 0.35
+        self._cur_cursor_y += (tgt_y - self._cur_cursor_y) * 0.35
+
+        cx = int(round(self._cur_cursor_x))
+        cy = int(round(self._cur_cursor_y))
+
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.user32.SetCursorPos(cx, cy)
+            except Exception:
+                pass
+
+        if hasattr(self, "reticle") and self.reticle.isVisible():
+            self.reticle.move(cx - 28, cy - 28)
+
+    def _on_biometric_click(self) -> None:
+        """Triggered by EAR double-blink or MAR quick jaw tap."""
+        if hasattr(self, "reticle"):
+            self.reticle.trigger_click_flash()
+        if not self.armed:
+            return
+        if sys.platform == "win32":
+            try:
+                import ctypes
+                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                time.sleep(0.015)
+                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+            except Exception:
+                pass
+        self.calib.append_log("BIOMETRIC: Left Click registered via facial gesture")
+        now_str = time.strftime("%H:%M:%S")
+        self._lbl_proof_last.setText(f"LAST INJECTION: LEFT CLICK (BIOMETRIC GESTURE) @ {now_str}")
+
+    def _on_speed_slider_changed(self, val: int) -> None:
+        speed = val / 10.0
+        self._lbl_speed_val.setText(f"{speed:.1f}x")
+        self.webcam_tracker.set_pointer_speed(speed)
+
+    def _on_smooth_slider_changed(self, val: int) -> None:
+        cutoff = val / 10.0
+        self._lbl_smooth_val.setText(f"{cutoff:.1f} Hz")
+        self.webcam_tracker.set_smoothing_cutoff(cutoff)
 
     def _on_optical_envelopes(self, vals: list[float], active: list[bool]) -> None:
         self.scope.push_sample(vals, active)

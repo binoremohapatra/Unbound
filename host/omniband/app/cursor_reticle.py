@@ -51,9 +51,9 @@ class SomaticCursorReticle(QWidget):
         self.dwell_progress = 0.0  # 0.0 to 1.0
         self._click_expire = 0.0
 
-        # 60 FPS Cursor tracking timer
+        # 120 Hz Cursor tracking timer (8ms)
         self._timer = QTimer(self)
-        self._timer.setInterval(16)
+        self._timer.setInterval(8)
         self._timer.timeout.connect(self._sync_position)
         self._timer.start()
 

@@ -101,3 +101,35 @@ def test_cursor_reticle_and_floating_kb(qapp):
     fk = FloatingKeyboardWindow()
     assert fk.windowFlags() & Qt.WindowDoesNotAcceptFocus
     assert fk.windowFlags() & Qt.WindowStaysOnTopHint
+
+
+def test_main_window_camera_controls_and_120hz_loop(qapp):
+    from host.omniband.app.main_window import MainWindow
+
+    win = MainWindow()
+    assert win.tabs.count() == 6
+    assert win.webcam_tracker is not None
+    assert win._slider_speed.value() == 12
+    assert win._slider_smooth.value() == 8
+
+    # Test slider adjustments
+    win._slider_speed.setValue(20)
+    assert win.webcam_tracker.speed_multiplier == 2.0
+
+    win._slider_smooth.setValue(12)
+    assert win.webcam_tracker.min_cutoff == 1.2
+
+    # Test cursor tick interpolation
+    win._on_cursor_tick()
+    assert win._cursor_initialized is True
+
+    # Test biometric click
+    win._on_biometric_click()
+    assert win.reticle.state == "CLICKED"
+
+    # Clean up background threads
+    win.webcam_tracker.stop()
+    win.key_poller.stop()
+    win.watcher.stop()
+    win._cursor_timer.stop()
+    win._proof_timer.stop()

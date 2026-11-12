@@ -292,13 +292,12 @@ class MainWindow(QMainWindow):
         )
         self.webcam_tracker.start()
 
-        # 120 Hz Decoupled Cursor Interpolation Timer (8 ms tick)
+        # 120 Hz eViacam / GameFace Delta-Velocity Integration Timer (8 ms tick)
         self._cursor_timer = QTimer(self)
         self._cursor_timer.setInterval(8)
         self._cursor_timer.timeout.connect(self._on_cursor_tick)
-        self._cur_cursor_x: float = 960.0
-        self._cur_cursor_y: float = 540.0
-        self._cursor_initialized: bool = False
+        self._subpixel_x: float = 0.0
+        self._subpixel_y: float = 0.0
         self._cursor_timer.start()
 
         # Physical Key Poller (F7-F10 + F11 + F12)
@@ -342,34 +341,49 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_cursor_tick(self) -> None:
-        """120 Hz butter-smooth sub-pixel cursor interpolation loop decoupled from 30 FPS camera."""
+        """120 Hz eViacam / GameFace delta-velocity cursor integration loop."""
         if not self.webcam_tracker.head_mouse_enabled:
             return
         if time.perf_counter() < self.webcam_tracker.freeze_until:
             return
 
-        tgt_x, tgt_y = self.webcam_tracker.target_pos
-        if not self._cursor_initialized:
-            self._cur_cursor_x = tgt_x
-            self._cur_cursor_y = tgt_y
-            self._cursor_initialized = True
+        vx, vy, in_deadzone = self.webcam_tracker.velocity_state
+        if in_deadzone or (vx == 0.0 and vy == 0.0):
+            # RULE #1 OF HEAD MICE: NEVER CALL SetCursorPos INSIDE DEADZONE!
+            # Zero jitter (0.0 px) and user can freely use their physical mouse
+            return
 
-        # Exponential sub-pixel approach (120 Hz smoothing step)
-        self._cur_cursor_x += (tgt_x - self._cur_cursor_x) * 0.35
-        self._cur_cursor_y += (tgt_y - self._cur_cursor_y) * 0.35
-
-        cx = int(round(self._cur_cursor_x))
-        cy = int(round(self._cur_cursor_y))
+        dt = 0.008  # 125 Hz tick interval
+        dx_px = vx * dt
+        dy_px = vy * dt
 
         if sys.platform == "win32":
             try:
                 import ctypes
-                ctypes.windll.user32.SetCursorPos(cx, cy)
+                from ctypes import wintypes
+                user32 = ctypes.windll.user32
+                pt = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+
+                self._subpixel_x += dx_px
+                self._subpixel_y += dy_px
+
+                step_x = int(self._subpixel_x)
+                step_y = int(self._subpixel_y)
+                self._subpixel_x -= step_x
+                self._subpixel_y -= step_y
+
+                if step_x != 0 or step_y != 0:
+                    sw = user32.GetSystemMetrics(0)
+                    sh = user32.GetSystemMetrics(1)
+                    new_x = max(0, min(sw - 1, pt.x + step_x))
+                    new_y = max(0, min(sh - 1, pt.y + step_y))
+                    user32.SetCursorPos(new_x, new_y)
+
+                    if hasattr(self, "reticle") and self.reticle.isVisible():
+                        self.reticle.move(new_x - 28, new_y - 28)
             except Exception:
                 pass
-
-        if hasattr(self, "reticle") and self.reticle.isVisible():
-            self.reticle.move(cx - 28, cy - 28)
 
     def _on_biometric_click(self) -> None:
         """Triggered by EAR double-blink or MAR quick jaw tap."""
@@ -415,9 +429,11 @@ class MainWindow(QMainWindow):
         new_state = not self.webcam_tracker.head_mouse_enabled
         self.webcam_tracker.head_mouse_enabled = new_state
         self._btn_head_mouse.setChecked(new_state)
+        # Flush and release all keys immediately on head-mouse toggle to prevent stuck keys
+        self.gw.release_all("head mouse mode toggle")
         if new_state:
             self._btn_head_mouse.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
-            self.status.showMessage("🖱️ HEAD-MOUSE ACTIVE: Moving head moves Windows mouse cursor", 3000)
+            self.status.showMessage("🖱️ HEAD-MOUSE ACTIVE: Moving head moves cursor | A/D scancodes blocked", 3000)
         else:
             self._btn_head_mouse.setStyleSheet("")
             self.status.showMessage("HEAD-MOUSE PAUSED", 2000)
@@ -486,10 +502,15 @@ class MainWindow(QMainWindow):
             self.gw.flush(time.perf_counter())
 
     def _on_optical_gesture(self, ch: int, down: bool, amp: float) -> None:
-        """Inject real OS keys and mouse inputs from facial motion and jaw drop."""
+        """Inject real OS keys only when in an actual game window and NOT in head-mouse mode."""
         if not self.armed:
             return
         now_str = time.strftime("%H:%M:%S")
+
+        # CRITICAL RULE: When Head-Mouse mode is active, head movement NEVER injects keyboard keys!
+        # Head movement is dedicated exclusively to cursor velocity control.
+        if self.webcam_tracker.head_mouse_enabled and ch in (1, 2, 3):
+            return
 
         # In Keyboard Tab: Route channels to Grid Navigation & Typing
         if self.tabs.currentIndex() == 1:
@@ -508,23 +529,26 @@ class MainWindow(QMainWindow):
                     self._lbl_proof_last.setText(f"KEYBOARD: Selected Key Typed @ {now_str}")
             return
 
-        # Target gating check
-        if not self._chk_allow_all.isChecked():
-            proc = get_active_process_win32()
-            exe_lower = proc.exe_name.lower()
-            allowed = ["cyberpunk2077.exe", "notepad.exe", "unbound.exe", "forzahorizon5.exe", "gta5.exe"]
-            if not any(a in exe_lower for a in allowed):
-                return
+        # Strict Game Mode Check: A/D/W keys are ONLY injected into racing/game targets
+        # or when active on the native Cyber-Arena simulator tab!
+        proc = get_active_process_win32()
+        exe_lower = proc.exe_name.lower()
+        is_racing_game = any(g in exe_lower for g in ["cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"])
+        is_arena_tab = (self.tabs.currentIndex() == 3)
+
+        # In desktop apps, browsers, chat windows, notepad: NEVER inject A/D keys from head turn!
+        if ch in (1, 2) and not (is_racing_game or is_arena_tab):
+            return
 
         from core.events import OutputCommand
         cmds = []
 
-        # Full 10-Action Game Control:
-        # CH1: Face Left -> A (Steer Left)
+        # Full Game Control:
+        # CH1: Face Left -> A (Steer Left in game)
         if ch == 1:
             cmds.append(OutputCommand(kind="key", name="a", pressed=down))
             self._lbl_proof_last.setText(f"LAST: Face L -> Key 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
-        # CH2: Face Right -> D (Steer Right)
+        # CH2: Face Right -> D (Steer Right in game)
         elif ch == 2:
             cmds.append(OutputCommand(kind="key", name="d", pressed=down))
             self._lbl_proof_last.setText(f"LAST: Face R -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")

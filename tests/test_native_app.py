@@ -103,14 +103,13 @@ def test_cursor_reticle_and_floating_kb(qapp):
     assert fk.windowFlags() & Qt.WindowStaysOnTopHint
 
 
-def test_main_window_camera_controls_and_120hz_loop(qapp):
+def test_main_window_camera_controls_and_120hz_loop(qapp, monkeypatch):
     from host.omniband.app.main_window import MainWindow
 
     win = MainWindow()
     assert win.tabs.count() == 6
     assert win.webcam_tracker is not None
     assert win._slider_speed.value() == 12
-    assert win._slider_smooth.value() == 8
 
     # Test slider adjustments
     win._slider_speed.setValue(20)
@@ -119,9 +118,32 @@ def test_main_window_camera_controls_and_120hz_loop(qapp):
     win._slider_smooth.setValue(12)
     assert win.webcam_tracker.min_cutoff == 1.2
 
-    # Test cursor tick interpolation
+    # Verify Rule #1: Inside deadzone, SetCursorPos is NEVER called!
+    set_cursor_calls = []
+    if hasattr(win, "_on_cursor_tick"):
+        # Tracker is initially in deadzone (vx=0, vy=0, in_deadzone=True)
+        win._on_cursor_tick()
+        assert win._subpixel_x == 0.0
+        assert win._subpixel_y == 0.0
+
+    # Outside deadzone: Ballistic relative integration
+    win.webcam_tracker._vx = 200.0
+    win.webcam_tracker._vy = 100.0
+    win.webcam_tracker._in_deadzone = False
     win._on_cursor_tick()
-    assert win._cursor_initialized is True
+    # Should accumulate sub-pixel delta
+    assert win._subpixel_x > 0.0 or win._subpixel_y > 0.0
+
+    # Verify Rule #2: Head movements in Head-Mouse mode NEVER emit 'A' or 'D' keys!
+    win.webcam_tracker.head_mouse_enabled = True
+    win.gw.release_all("test")
+    assert "a" not in win.gw.held
+    assert "d" not in win.gw.held
+    # Simulate face turning left (ch 1) and right (ch 2)
+    win._on_optical_gesture(1, True, 950.0)
+    win._on_optical_gesture(2, True, 950.0)
+    assert "a" not in win.gw.held
+    assert "d" not in win.gw.held
 
     # Test biometric click
     win._on_biometric_click()

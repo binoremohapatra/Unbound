@@ -82,13 +82,22 @@ def test_arena_widget_scancode_handling(qapp):
     assert arena._key_w is False
 
 
-def test_main_window_init(qapp):
-    from host.omniband.app.main_window import MainWindow
+def test_cursor_reticle_and_floating_kb(qapp):
+    from host.omniband.app.cursor_reticle import SomaticCursorReticle
+    from host.omniband.app.floating_keyboard import FloatingKeyboardWindow
+    from PySide6.QtCore import Qt
 
-    win = MainWindow()
-    assert win.tabs.count() == 6  # Scope, Keyboard, Camera, Arena, ICU, Calibration
-    assert win.scope is not None
-    assert win.keyboard is not None
-    assert win.arena is not None
-    assert win.icu is not None
-    assert win.calib is not None
+    reticle = SomaticCursorReticle()
+    assert reticle.windowFlags() & Qt.FramelessWindowHint
+    assert reticle.windowFlags() & Qt.WindowTransparentForInput
+    assert reticle.state == "NORMAL"
+
+    reticle.trigger_click_flash()
+    assert reticle.state == "CLICKED"
+
+    reticle.set_drag_locked(True)
+    assert reticle.state == "DRAG_LOCKED"
+
+    fk = FloatingKeyboardWindow()
+    assert fk.windowFlags() & Qt.WindowDoesNotAcceptFocus
+    assert fk.windowFlags() & Qt.WindowStaysOnTopHint

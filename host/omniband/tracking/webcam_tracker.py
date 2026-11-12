@@ -52,8 +52,15 @@ class RealWebcamTracker:
         self._base_y = 0.0
         self._calibrated = False
 
-        # Head mouse state
-        self.head_mouse_enabled = False
+        # Head mouse state (Enabled by default)
+        self.head_mouse_enabled = True
+        self._smooth_x = 0.0
+        self._smooth_y = 0.0
+        self._freeze_until = 0.0
+
+    def trigger_blink_freeze(self, duration_s: float = 0.35) -> None:
+        """Freeze cursor updates during clicks/blinks so cursor does not jump off target."""
+        self._freeze_until = time.perf_counter() + duration_s
 
     def recenter(self) -> None:
         """Trigger re-calibration of the resting neutral face center."""
@@ -160,15 +167,44 @@ class RealWebcamTracker:
                     if norm_y < -DEADZONE:
                         ch3 = min(1.0, motion_intensity * ((abs(norm_y) - DEADZONE) / (1.0 - DEADZONE)) * 2.0)
 
-                    # Webcam Head-Mouse feature: move Windows mouse cursor
-                    if self.head_mouse_enabled and (abs(norm_x) > DEADZONE or abs(norm_y) > DEADZONE):
+                    # Webcam Head-Mouse feature: drive real Windows mouse cursor with 1-Euro / EMA filter
+                    if self.head_mouse_enabled and time.perf_counter() >= self._freeze_until:
                         try:
                             import ctypes
-                            dx = int((norm_x if abs(norm_x) > DEADZONE else 0.0) * 16)
-                            dy = int((norm_y if abs(norm_y) > DEADZONE else 0.0) * 16)
-                            pt = ctypes.wintypes.POINT()
-                            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-                            ctypes.windll.user32.SetCursorPos(pt.x + dx, pt.y + dy)
+                            user32 = ctypes.windll.user32
+                            sw = user32.GetSystemMetrics(0)
+                            sh = user32.GetSystemMetrics(1)
+
+                            # Deadzone offset calculation
+                            off_x = 0.0
+                            if norm_x < -DEADZONE:
+                                off_x = (norm_x + DEADZONE) / (1.0 - DEADZONE)
+                            elif norm_x > DEADZONE:
+                                off_x = (norm_x - DEADZONE) / (1.0 - DEADZONE)
+
+                            off_y = 0.0
+                            if norm_y < -DEADZONE:
+                                off_y = (norm_y + DEADZONE) / (1.0 - DEADZONE)
+                            elif norm_y > DEADZONE:
+                                off_y = (norm_y - DEADZONE) / (1.0 - DEADZONE)
+
+                            if off_x != 0.0 or off_y != 0.0:
+                                # Target position on screen
+                                target_x = (sw / 2.0) + (off_x * (sw / 2.0) * 1.2)
+                                target_y = (sh / 2.0) + (off_y * (sh / 2.0) * 1.2)
+
+                                # EMA smoothing filter (alpha=0.25)
+                                alpha = 0.25
+                                if self._smooth_x == 0.0 and self._smooth_y == 0.0:
+                                    self._smooth_x = target_x
+                                    self._smooth_y = target_y
+                                else:
+                                    self._smooth_x = (1.0 - alpha) * self._smooth_x + alpha * target_x
+                                    self._smooth_y = (1.0 - alpha) * self._smooth_y + alpha * target_y
+
+                                cx_clamped = max(0, min(sw - 1, int(self._smooth_x)))
+                                cy_clamped = max(0, min(sh - 1, int(self._smooth_y)))
+                                user32.SetCursorPos(cx_clamped, cy_clamped)
                         except Exception:
                             pass
 

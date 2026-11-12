@@ -36,6 +36,8 @@ from host.omniband.app.hud_overlay import HudOverlay
 from host.omniband.app.tray_agent import SystemTrayAgent
 from host.omniband.app.auto_profile import AutoProfileWatcher, ProfileRule, get_active_process_win32
 from host.omniband.app.somatic_keyboard import SomaticKeyboardWidget
+from host.omniband.app.floating_keyboard import FloatingKeyboardWindow
+from host.omniband.app.cursor_reticle import SomaticCursorReticle
 from host.omniband.tracking.webcam_tracker import RealWebcamTracker
 from host.omniband.tracking.physical_keys import PhysicalKeyPoller
 
@@ -50,6 +52,15 @@ class MainWindow(QMainWindow):
 
         # Child windows & agents
         self.hud = HudOverlay()
+        self.reticle = SomaticCursorReticle()
+        self.reticle.show()
+
+        self.floating_kb = FloatingKeyboardWindow(
+            on_type_fn=self._inject_keyboard_char,
+            on_scroll_fn=self._inject_mouse_scroll,
+            on_toggle_drag_fn=self._toggle_drag_lock,
+        )
+
         self.tray = SystemTrayAgent(self)
         self.tray.show()
 
@@ -68,20 +79,22 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(12, 12, 12, 12)
         root_layout.setSpacing(8)
 
-        # Armed / Disarmed State (Starts DISARMED by default)
-        self.armed = False
+        # Armed / Disarmed State (Starts ARMED by default for instant feedback)
+        self.armed = True
         self._cruise_w = False
         self._sprint_shift = False
         self._aim_ads = False
+        self._drag_latch = False
 
         # Top Bar: Mode Selector, Tier Indicator, HUD Toggle
         top_bar = QHBoxLayout()
 
-        self._btn_arm = QPushButton("🔴 DISARMED (SAFE) [F12]")
-        self._btn_arm.setObjectName("danger_btn")
+        self._btn_arm = QPushButton("🟢 ARMED (LIVE) [F12]")
+        self._btn_arm.setObjectName("accent_btn")
         self._btn_arm.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self._btn_arm.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
         self._btn_arm.setCheckable(True)
-        self._btn_arm.setChecked(False)
+        self._btn_arm.setChecked(True)
         self._btn_arm.clicked.connect(self._toggle_arm_disarm)
 
         lbl_mode = QLabel("Operational Mode:")
@@ -104,12 +117,25 @@ class MainWindow(QMainWindow):
         btn_toggle_hud = QPushButton("Toggle Tactical HUD")
         btn_toggle_hud.clicked.connect(self._toggle_hud)
 
+        self._chk_reticle = QCheckBox("🎯 Tactical Reticle")
+        self._chk_reticle.setChecked(True)
+        self._chk_reticle.toggled.connect(lambda c: self.reticle.setVisible(c))
+
+        btn_popout_kb = QPushButton("⌨️ FLOATING KEYBOARD")
+        btn_popout_kb.clicked.connect(self._toggle_floating_keyboard)
+
+        self._btn_head_mouse = QPushButton("🖱️ HEAD-MOUSE: ON [F11]")
+        self._btn_head_mouse.setCheckable(True)
+        self._btn_head_mouse.setChecked(True)
+        self._btn_head_mouse.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
+        self._btn_head_mouse.clicked.connect(self._toggle_head_mouse)
+
         self._chk_lock_mode = QPushButton("🔓 Auto-Mode")
         self._chk_lock_mode.setCheckable(True)
         self._chk_lock_mode.toggled.connect(self._on_lock_mode_toggled)
 
         self._chk_allow_all = QCheckBox("Allow All Windows (Desktop Test Mode)")
-        self._chk_allow_all.setChecked(False)  # Unchecked by default for safety
+        self._chk_allow_all.setChecked(True)  # Checked by default so Notepad/Games work immediately!
         self._chk_allow_all.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold;")
 
         btn_release = QPushButton("⚠️ RELEASE ALL")
@@ -117,11 +143,14 @@ class MainWindow(QMainWindow):
         btn_release.clicked.connect(self._emergency_release_all)
 
         top_bar.addWidget(self._btn_arm)
+        top_bar.addWidget(self._btn_head_mouse)
+        top_bar.addWidget(btn_popout_kb)
         top_bar.addWidget(lbl_mode)
         top_bar.addWidget(self._combo_mode)
         top_bar.addWidget(self._chk_lock_mode)
         top_bar.addWidget(self._chk_allow_all)
-        top_bar.addSpacing(16)
+        top_bar.addSpacing(12)
+        top_bar.addWidget(self._chk_reticle)
         top_bar.addWidget(self._lbl_tier)
         top_bar.addStretch()
         top_bar.addWidget(btn_toggle_hud)
@@ -224,10 +253,11 @@ class MainWindow(QMainWindow):
         )
         self.webcam_tracker.start()
 
-        # Physical Key Poller (F7-F10 + F12)
+        # Physical Key Poller (F7-F10 + F11 + F12)
         self.key_poller = PhysicalKeyPoller(
             on_edge=self._on_physical_edge,
             on_envelopes=self._on_key_envelopes,
+            on_f11_toggle=self._toggle_head_mouse,
             on_f12_toggle=self._toggle_arm_disarm,
         )
         self.key_poller.start()
@@ -260,6 +290,49 @@ class MainWindow(QMainWindow):
 
     def _on_key_envelopes(self, vals: list[float], active: list[bool]) -> None:
         self.scope.push_sample(vals, active)
+
+    def _toggle_floating_keyboard(self) -> None:
+        if self.floating_kb.isVisible():
+            self.floating_kb.hide()
+        else:
+            self.floating_kb.show()
+
+    def _toggle_head_mouse(self) -> None:
+        new_state = not self.webcam_tracker.head_mouse_enabled
+        self.webcam_tracker.head_mouse_enabled = new_state
+        self._btn_head_mouse.setChecked(new_state)
+        if new_state:
+            self._btn_head_mouse.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
+            self.status.showMessage("🖱️ HEAD-MOUSE ACTIVE: Moving head moves Windows mouse cursor", 3000)
+        else:
+            self._btn_head_mouse.setStyleSheet("")
+            self.status.showMessage("HEAD-MOUSE PAUSED", 2000)
+
+    def _toggle_drag_lock(self) -> None:
+        """Toggle Left Mouse Button drag latch."""
+        if not self.armed:
+            return
+        from core.events import OutputCommand
+        self._drag_latch = not self._drag_latch
+        self.reticle.set_drag_locked(self._drag_latch)
+        cmd = OutputCommand(kind="button", name="left", pressed=self._drag_latch)
+        self.gw.apply([cmd])
+        self.gw.flush(time.perf_counter())
+        now_str = time.strftime("%H:%M:%S")
+        self._lbl_proof_last.setText(f"DRAG LATCH: {'LOCKED (HELD)' if self._drag_latch else 'RELEASED (DROP)'} @ {now_str}")
+
+    def _inject_mouse_scroll(self, delta: int) -> None:
+        """Inject Win32 mouse wheel scroll without stealing focus."""
+        if not self.armed:
+            return
+        try:
+            import ctypes
+            MOUSEEVENTF_WHEEL = 0x0800
+            ctypes.windll.user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, delta, 0)
+            self.reticle.set_scrolling(True)
+            QTimer.singleShot(300, lambda: self.reticle.set_scrolling(False))
+        except Exception:
+            pass
 
     def _toggle_arm_disarm(self) -> None:
         self.armed = not self.armed
@@ -341,8 +414,14 @@ class MainWindow(QMainWindow):
         elif ch == 2:
             cmds.append(OutputCommand(kind="key", name="d", pressed=down))
             self._lbl_proof_last.setText(f"LAST: Face R -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
-        # CH4: Jaw Drop -> Left Click / Primary Fire
+        # CH4: Jaw Drop -> Left Click / Primary Fire / Release Drag
         elif ch == 4:
+            self.webcam_tracker.trigger_blink_freeze(0.35)
+            self.reticle.trigger_click_flash()
+            if self._drag_latch and down:
+                # Release drag lock
+                self._toggle_drag_lock()
+                return
             cmds.append(OutputCommand(kind="button", name="left", pressed=down))
             self._lbl_proof_last.setText(f"LAST: Jaw Drop -> Left Click ({'DOWN' if down else 'UP'}) @ {now_str}")
 
@@ -398,8 +477,13 @@ class MainWindow(QMainWindow):
                 self._cruise_w = not self._cruise_w
                 cmds.append(OutputCommand(kind="key", name="w", pressed=self._cruise_w))
                 self._lbl_proof_last.setText(f"LAST: F9 -> Cruise Latch 'w' ({'ON' if self._cruise_w else 'OFF'}) @ {now_str}")
-        # F10 -> CH4 (Left Click / Space / Handbrake)
+        # F10 -> CH4 (Left Click / Space / Handbrake / Release Drag)
         elif ch == 4:
+            self.webcam_tracker.trigger_blink_freeze(0.35)
+            self.reticle.trigger_click_flash()
+            if self._drag_latch and down:
+                self._toggle_drag_lock()
+                return
             cmds.append(OutputCommand(kind="button", name="left", pressed=down))
             self._lbl_proof_last.setText(f"LAST: F10 -> Mouse Left ({'DOWN' if down else 'UP'}) @ {now_str}")
 

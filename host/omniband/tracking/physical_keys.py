@@ -23,20 +23,23 @@ VK_F7  = 0x76
 VK_F8  = 0x77
 VK_F9  = 0x78
 VK_F10 = 0x79
+VK_F11 = 0x7A
 VK_F12 = 0x7B
 
 
 class PhysicalKeyPoller:
-    """Polls F7-F10 and F12 (Master Arm/Disarm) at 250-500 Hz using Win32 GetAsyncKeyState."""
+    """Polls F7-F10 (Channels), F11 (Head-Mouse Toggle), F12 (Arm/Disarm)."""
 
     def __init__(
         self,
         on_edge: Optional[Callable[[int, bool, float], None]] = None,
         on_envelopes: Optional[Callable[[list[float], list[bool]], None]] = None,
+        on_f11_toggle: Optional[Callable[[], None]] = None,
         on_f12_toggle: Optional[Callable[[], None]] = None,
     ) -> None:
         self.on_edge = on_edge
         self.on_envelopes = on_envelopes
+        self.on_f11_toggle = on_f11_toggle
         self.on_f12_toggle = on_f12_toggle
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -45,6 +48,7 @@ class PhysicalKeyPoller:
         self._f8 = False
         self._f9 = False
         self._f10 = False
+        self._f11 = False
         self._f12 = False
 
     def start(self) -> bool:
@@ -72,9 +76,16 @@ class PhysicalKeyPoller:
             f8_down = bool(user32.GetAsyncKeyState(VK_F8) & 0x8000)
             f9_down = bool(user32.GetAsyncKeyState(VK_F9) & 0x8000)
             f10_down = bool(user32.GetAsyncKeyState(VK_F10) & 0x8000)
+            f11_down = bool(user32.GetAsyncKeyState(VK_F11) & 0x8000)
             f12_down = bool(user32.GetAsyncKeyState(VK_F12) & 0x8000)
 
-            # F12 Master Arm/Disarm Toggle (on key press)
+            # F11 Head-Mouse Toggle
+            if f11_down and not self._f11:
+                if self.on_f11_toggle:
+                    self.on_f11_toggle()
+            self._f11 = f11_down
+
+            # F12 Master Arm/Disarm Toggle
             if f12_down and not self._f12:
                 if self.on_f12_toggle:
                     self.on_f12_toggle()

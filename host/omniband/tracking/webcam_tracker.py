@@ -30,16 +30,21 @@ class RealWebcamTracker:
         camera_id: int = 0,
         on_envelopes: Optional[Callable[[list[float], list[bool]], None]] = None,
         on_frame: Optional[Callable[[np.ndarray], None]] = None,
+        on_gesture: Optional[Callable[[int, bool, float], None]] = None,
     ) -> None:
         self.camera_id = camera_id
         self.on_envelopes = on_envelopes
         self.on_frame = on_frame
+        self.on_gesture = on_gesture
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._prev_gray: Optional[np.ndarray] = None
         self._face_cx = 320.0
         self._face_cy = 240.0
+        self._ch1_active = False
+        self._ch2_active = False
+        self._ch4_active = False
 
     def start(self) -> bool:
         if self._running:
@@ -137,6 +142,25 @@ class RealWebcamTracker:
             if self.on_envelopes:
                 active = [ch1 > 0.35, ch2 > 0.35, ch3 > 0.35, ch4 > 0.35]
                 self.on_envelopes([ch1, ch2, ch3, ch4], active)
+
+            if self.on_gesture:
+                # Steer Left (CH1)
+                is_ch1 = ch1 > 0.35
+                if is_ch1 != self._ch1_active:
+                    self._ch1_active = is_ch1
+                    self.on_gesture(1, is_ch1, ch1 * 950.0)
+
+                # Steer Right (CH2)
+                is_ch2 = ch2 > 0.35
+                if is_ch2 != self._ch2_active:
+                    self._ch2_active = is_ch2
+                    self.on_gesture(2, is_ch2, ch2 * 950.0)
+
+                # Jaw Drop / Mouth Open (CH4)
+                is_ch4 = ch4 > 0.35
+                if is_ch4 != self._ch4_active:
+                    self._ch4_active = is_ch4
+                    self.on_gesture(4, is_ch4, ch4 * 950.0)
 
             time.sleep(0.02)  # ~50 FPS capture loop
 

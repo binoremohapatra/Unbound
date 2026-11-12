@@ -139,30 +139,11 @@ class OscilloscopeWidget(QWidget):
         self._timer.timeout.connect(self._canvas.update)
         self._timer.start()
 
-        # Demo noise timer (removed when real data hooked in)
-        self._demo_timer = QTimer(self)
-        self._demo_timer.setInterval(16)
-        self._demo_timer.timeout.connect(self._demo_tick)
-        self._demo_timer.start()
-
-        self._t: float = 0.0
-
-    def _demo_tick(self) -> None:
-        """Generate synthetic waveform until real data is connected."""
-        import math
-        self._t += 0.05
-        vals = [
-            0.5 + 0.4 * math.sin(self._t),
-            0.5 + 0.3 * math.sin(self._t * 1.3 + 1),
-            0.5 + 0.35 * math.sin(self._t * 0.7 + 2),
-            0.5 + 0.25 * math.sin(self._t * 2.1 + 3),
-        ]
-        active = [v > self._canvas._thresholds[i] for i, v in enumerate(vals)]
-        self._canvas.push_sample(vals, active)
+        # No fake autonomous demo noise - real baseline until physical input arrives
+        self._demo_timer = None
 
     def push_sample(self, ch_values: List[float], active: List[bool]) -> None:
         """External call: push live telemetry values (0.0–1.0 each channel)."""
-        self._demo_timer.stop()
         self._canvas.push_sample(ch_values, active)
 
     def _on_threshold(self, ch: int, slider_val: int) -> None:

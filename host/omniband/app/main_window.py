@@ -189,6 +189,7 @@ class MainWindow(QMainWindow):
             camera_id=0,
             on_envelopes=self._on_optical_envelopes,
             on_frame=self._on_webcam_frame,
+            on_gesture=self._on_optical_gesture,
         )
         self.webcam_tracker.start()
 
@@ -227,6 +228,36 @@ class MainWindow(QMainWindow):
 
     def _on_key_envelopes(self, vals: list[float], active: list[bool]) -> None:
         self.scope.push_sample(vals, active)
+
+    def _on_optical_gesture(self, ch: int, down: bool, amp: float) -> None:
+        """Inject real OS keys and mouse inputs from facial motion and jaw drop."""
+        from core.events import OutputCommand
+        cmds = []
+        now_str = time.strftime("%H:%M:%S")
+
+        if not self._chk_allow_all.isChecked():
+            proc = get_active_process_win32()
+            exe_lower = proc.exe_name.lower()
+            allowed = ["cyberpunk2077.exe", "notepad.exe", "unbound.exe"]
+            if not any(a in exe_lower for a in allowed):
+                return
+
+        # CH1: Face Left -> A (Steer Left)
+        if ch == 1:
+            cmds.append(OutputCommand(kind="key", name="a", pressed=down))
+            self._lbl_proof_last.setText(f"LAST: Face L -> Key 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
+        # CH2: Face Right -> D (Steer Right)
+        elif ch == 2:
+            cmds.append(OutputCommand(kind="key", name="d", pressed=down))
+            self._lbl_proof_last.setText(f"LAST: Face R -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
+        # CH4: Jaw Drop -> Left Click / Action
+        elif ch == 4:
+            cmds.append(OutputCommand(kind="button", name="left", pressed=down))
+            self._lbl_proof_last.setText(f"LAST: Jaw Drop -> Left Click ({'DOWN' if down else 'UP'}) @ {now_str}")
+
+        if cmds:
+            self.gw.apply(cmds)
+            self.gw.flush(time.perf_counter())
 
     def _on_physical_edge(self, ch: int, down: bool, amp: float) -> None:
         from core.events import OutputCommand

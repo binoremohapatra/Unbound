@@ -93,6 +93,16 @@ class DashboardServer:
         async def get_index():
             return FileResponse(static_dir / "index.html")
 
+        @self.app.get("/arena")
+        async def get_arena():
+            return FileResponse(static_dir / "arena" / "index.html")
+
+        @self.app.post("/api/telemetry")
+        async def post_telemetry(payload: Dict[str, Any]):
+            # Updates internal telemetry buffer for arena stream
+            self.update_telemetry("arena_telemetry", payload)
+            return {"status": "ok"}
+
         @self.app.get("/api/keyboard-layout")
         async def get_layout():
             # Return serialized layout definition

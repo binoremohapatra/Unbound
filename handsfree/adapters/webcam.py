@@ -134,8 +134,19 @@ class WebcamAdapter:
                 logger.warning(f"Could not initialize legacy FaceMesh: {e}")
 
         # Attempt 3: Built-in OpenCV Face Tracking (Cascade Classifier)
-        logger.info("Using built-in OpenCV face detection for head tracking.")
-        self._run_opencv_cascade_loop(cap)
+        if hasattr(cv2, "CascadeClassifier") and hasattr(cv2, "data") and hasattr(cv2.data, "haarcascades"):
+            try:
+                cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
+                face_cascade = cv2.CascadeClassifier(cascade_path)
+                logger.info("Using built-in OpenCV face detection for head tracking.")
+                self._run_opencv_cascade_loop(cap, face_cascade)
+                return
+            except Exception as e:
+                logger.warning(f"Could not initialize OpenCV cascade classifier: {e}")
+
+        # Attempt 4: Fallback to mock loop if no vision detectors available
+        logger.info("No face tracking backend available on camera. Falling back to mock loop.")
+        self._run_mock_loop()
 
     def _run_mediapipe_tasks_loop(self, cap, landmarker) -> None:
         while self.is_running:
@@ -241,9 +252,7 @@ class WebcamAdapter:
 
             cap.release()
 
-    def _run_opencv_cascade_loop(self, cap) -> None:
-        cascade_path = cv2.data.haarcascades + "haarcascade_frontalface_default.xml"
-        face_cascade = cv2.CascadeClassifier(cascade_path)
+    def _run_opencv_cascade_loop(self, cap, face_cascade) -> None:
 
         while self.is_running:
             ret, frame = cap.read()

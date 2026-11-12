@@ -1,0 +1,24 @@
+{
+  "profile_name": "cyberpunk_2077_direct",
+  "target_window": "Cyberpunk2077.exe",
+  "telemetry_source": "none",
+  "assist_level_default": "OFF",
+  "assist_forced_label": "N/A (no telemetry)",
+  "hud_notice": "ASSIST: N/A (DIRECT SOMATIC CYBERWARE MODE)",
+  "simulator_keys": {
+    "ch1": "f7",
+    "ch2": "f8",
+    "ch3": "f9",
+    "ch4": "f10"
+  },
+  "bindings": {
+    "ch1_raw": "a",
+    "ch2_raw": "d",
+    "ch3_pulse": "w",
+    "ch4_single": "left_click",
+    "ch4_double": "e",
+    "ch4_triple": "r"
+  },
+  "notes": "Direct somatic control without AI co-pilot intervention. Target-window allow-listed for Cyberpunk2077.exe only."
+}
+

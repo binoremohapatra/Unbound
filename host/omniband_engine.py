@@ -54,8 +54,8 @@ def _build_transports(args):
         ports.append(args.port)
     if args.bt_port:
         ports.append(args.bt_port)
-    if not ports:
-        log.error("no transport: pass --simulate or --port COMx")
+    if not ports and not (args.optical or args.optical_fallback):
+        log.error("no transport: pass --simulate, --port COMx, or --optical")
         sys.exit(2)
     for i, p in enumerate(ports):
         name = "usb" if i == 0 else "bt"
@@ -227,7 +227,7 @@ def main() -> int:
             optical = None
 
     try:
-        eng.run(duration_s=args.duration or (30.0 if args.simulate else None))
+        eng.run(duration_s=args.duration)
     except KeyboardInterrupt:
         log.info("interrupted")
     finally:

@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>UNBOUND — 3D Cyberpunk Highway Arena (GM-01)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { background: #0a0b0d; color: #e9e5de; font-family: ui-monospace, 'Cascadia Mono', Consolas, monospace; overflow: hidden; }
+    #canvas-container { width: 100vw; height: 100vh; position: absolute; top: 0; left: 0; z-index: 1; }
+    #hud-overlay { position: absolute; top: 0; left: 0; width: 100vw; height: 100vh; z-index: 10; pointer-events: none; display: flex; flex-direction: column; justify-content: space-between; padding: 24px; }
+    .hud-box { background: rgba(24, 26, 27, 0.85); border: 1px solid #716d67; border-radius: 8px; padding: 12px 18px; pointer-events: auto; backdrop-filter: blur(4px); }
+    .badge { display: inline-block; padding: 4px 10px; border-radius: 4px; font-weight: bold; font-size: 13px; text-transform: uppercase; }
+    .badge-t1 { background: #252525; color: #f07842; border: 1px solid #f07842; }
+    .badge-t2 { background: #252525; color: #d97757; border: 1px solid #d97757; }
+    .badge-t3 { background: #252525; color: #a94e29; border: 1px solid #a94e29; }
+    .badge-assist { background: #1f3a2b; color: #4ade80; border: 1px solid #22c55e; }
+    .witness-counter { font-size: 14px; font-weight: bold; color: #38bdf8; }
+    .speedometer { font-size: 32px; font-weight: 800; color: #f7f5f0; }
+    .toast-box { min-height: 28px; color: #e0303d; font-weight: bold; font-size: 14px; }
+    .authority-bar { width: 220px; height: 10px; background: #252525; border-radius: 5px; overflow: hidden; display: flex; margin-top: 6px; }
+    .auth-human { height: 100%; background: #f07842; width: 50%; }
+    .auth-copilot { height: 100%; background: #38bdf8; width: 50%; }
+  </style>
+</head>
+<body>
+  <div id="canvas-container"></div>
+  <div id="hud-overlay">
+    <div style="display: flex; justify-content: space-between; align-items: flex-start;">
+      <div class="hud-box">
+        <h2 style="font-size: 16px; margin-bottom: 6px; color: #f07842;">UNBOUND CO-PILOT HUD</h2>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <span id="tier-badge" class="badge badge-t1">T1 USB</span>
+          <span id="assist-badge" class="badge badge-assist">ASSIST: FULL</span>
+        </div>
+        <div style="margin-top: 8px; font-size: 12px; color: #716d67;">
+          Authority Split:
+          <div class="authority-bar">
+            <div id="auth-human-fill" class="auth-human"></div>
+            <div id="auth-copilot-fill" class="auth-copilot"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="hud-box" style="text-align: right;">
+        <div class="speedometer"><span id="speed-display">0</span> <span style="font-size: 16px; color: #716d67;">km/h</span></div>
+        <div id="witness-tag" class="witness-counter" style="margin-top: 6px;">
+          OS Trusted: <span id="trusted-count">0</span> | Untrusted JS: <span id="untrusted-count">0</span>
+        </div>
+        <div style="font-size: 11px; color: #716d67; margin-top: 4px;">[event.isTrusted Witness Loop GM-04]</div>
+      </div>
+    </div>
+
+    <div style="display: flex; justify-content: space-between; align-items: flex-end;">
+      <div class="hud-box" style="max-width: 450px;">
+        <div style="font-size: 11px; color: #716d67; margin-bottom: 4px;">ACTIVE REASONS & VETOES</div>
+        <div id="reason-toast" class="toast-box" role="alert" aria-live="assertive">CO-PILOT READY: TRACK ACQUIRED</div>
+      </div>
+      <div class="hud-box" style="font-size: 12px; color: #716d67;">
+        Input: W (Throttle) | A/D (Steer) | S (Brake) | Space (Handbrake)
+      </div>
+    </div>
+  </div>
+
+  <script src="../vendor/three.min.js"></script>
+  <script src="arena.js"></script>
+</body>
+</html>
+

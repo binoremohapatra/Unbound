@@ -1,0 +1,22 @@
+{
+  "profile_name": "racing_arena",
+  "target_window": "3D WebGL Cyberpunk Arena",
+  "telemetry_source": "arena_http",
+  "assist_level_default": "FULL",
+  "target_speed_mps": 22.0,
+  "min_pulse_ticks": 2,
+  "key_bindings": {
+    "steer_left": "a",
+    "steer_right": "d",
+    "throttle": "w",
+    "brake": "s",
+    "handbrake": "space",
+    "nitro": "shift"
+  },
+  "identification": {
+    "steer_rise_time_s": 0.28,
+    "max_steer_rate": 3.5,
+    "brake_decel_mps2": 11.0
+  }
+}
+

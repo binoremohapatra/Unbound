@@ -120,12 +120,12 @@ def test_draw_deadzone_ring_and_hud():
     assert np.count_nonzero(frame2) > 50
 
 
-def test_lucas_kanade_optical_flow_seeding():
+def test_facemesh_wireframe_drawing():
+    from collections import namedtuple
+    Point = namedtuple("Point", ["x", "y"])
     tracker = RealWebcamTracker(camera_id=999)
-    gray = np.zeros((480, 640), dtype=np.uint8)
-    # Put some texture
-    cv2.circle(gray, (320, 240), 20, 255, -1)
-    norm_x, norm_y = tracker._track_lucas_kanade(gray, 640, 480)
-    assert 0.0 <= norm_x <= 1.0
-    assert 0.0 <= norm_y <= 1.0
-    assert tracker._lk_points is not None
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    # Generate 468 mock landmarks
+    mock_lm = [Point(x=0.4 + 0.2 * (i / 468.0), y=0.3 + 0.3 * ((i * 7 % 468) / 468.0)) for i in range(468)]
+    tracker._draw_facemesh_wireframe(frame, mock_lm, 640, 480)
+    assert np.count_nonzero(frame) > 100

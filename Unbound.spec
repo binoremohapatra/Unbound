@@ -6,6 +6,7 @@ block_cipher = None
 datas = [
     ('host/profiles/*.json', 'host/profiles'),
     ('protocol/constants.json', 'protocol'),
+    ('face_landmarker.task', '.'),
 ]
 
 hiddenimports = [

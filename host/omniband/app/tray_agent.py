@@ -43,6 +43,20 @@ class SystemTrayAgent(QSystemTrayIcon):
 
         menu.addSeparator()
 
+        # Startup toggle
+        from host.omniband.app.startup_registry import is_run_at_startup_enabled, set_run_at_startup
+        self._act_startup = menu.addAction("Start Unbound with Windows")
+        self._act_startup.setCheckable(True)
+        self._act_startup.setChecked(is_run_at_startup_enabled())
+        self._act_startup.toggled.connect(self._on_toggle_startup)
+
+        # Auto profile switcher toggle
+        self._act_auto_profile = menu.addAction("Auto-Switch Game Profiles")
+        self._act_auto_profile.setCheckable(True)
+        self._act_auto_profile.setChecked(True)
+
+        menu.addSeparator()
+
         # Mode submenu
         mode_menu = menu.addMenu("Operational Mode")
         modes = [
@@ -80,6 +94,10 @@ class SystemTrayAgent(QSystemTrayIcon):
         if reason == QSystemTrayIcon.Trigger:  # Single click
             self.sig_toggle_main_window.emit()
 
+    def _on_toggle_startup(self, checked: bool) -> None:
+        from host.omniband.app.startup_registry import set_run_at_startup
+        set_run_at_startup(checked)
+
     def _create_tray_icon(self) -> QIcon:
         pix = QPixmap(32, 32)
         pix.fill(Qt.transparent)
@@ -90,3 +108,4 @@ class SystemTrayAgent(QSystemTrayIcon):
         p.drawEllipse(4, 4, 24, 24)
         p.end()
         return QIcon(pix)
+

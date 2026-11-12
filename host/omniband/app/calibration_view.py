@@ -101,3 +101,4 @@ class CalibrationView(QWidget):
     def append_log(self, text: str) -> None:
         ts = time.strftime("%H:%M:%S")
         self._log_edit.appendPlainText(f"[{ts}] {text}")
+

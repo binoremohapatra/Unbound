@@ -44,6 +44,49 @@ def _build_sink(args):
         return DryRunSink()
 
 
+def _auto_discover_transports(baud: int):
+    """Probe USB/BT ports, falling back smoothly to SimDevice if none connected."""
+    import serial.tools.list_ports
+    ports = list(serial.tools.list_ports.comports())
+    valid_ports = []
+    for p in ports:
+        desc = p.description.lower()
+        if "usb" in desc or "ch340" in desc or "cp210" in desc or "serial" in desc:
+            valid_ports.append(p.device)
+
+    if valid_ports:
+        log.info("Auto-discovered hardware COM port: %s", valid_ports[0])
+        return [SerialTransport(valid_ports[0], baud, "usb")], None
+
+    # Fallback to interactive simulator device
+    log.info("No ESP32 serial device found; activating zero-config Interactive Simulator")
+    dev = SimDevice(auto_gestures=True)
+    return [SimTransport(dev, "sim")], dev
+
+
+def _launch_native_gui(args) -> int:
+    """Launch PySide6 Native Command Center, System Tray, and HUD Overlay."""
+    try:
+        from PySide6.QtWidgets import QApplication
+        from host.omniband.app.theme import apply_theme
+        from host.omniband.app.main_window import MainWindow
+
+        app = QApplication.instance() or QApplication(sys.argv)
+        apply_theme(app)
+        app.setQuitOnLastWindowClosed(False)
+
+        win = MainWindow()
+        if not getattr(args, "minimized", False):
+            win.show()
+        else:
+            log.info("Started silently in system tray (--minimized)")
+
+        return app.exec()
+    except Exception as e:
+        log.error("Failed launching PySide6 GUI: %s", e)
+        return 1
+
+
 def _build_transports(args):
     if args.simulate:
         dev = SimDevice(auto_gestures=not args.no_auto)
@@ -55,8 +98,7 @@ def _build_transports(args):
     if args.bt_port:
         ports.append(args.bt_port)
     if not ports and not (args.optical or args.optical_fallback):
-        log.error("no transport: pass --simulate, --port COMx, or --optical")
-        sys.exit(2)
+        return _auto_discover_transports(args.baud)
     for i, p in enumerate(ports):
         name = "usb" if i == 0 else "bt"
         transports.append(SerialTransport(p, args.baud, name))
@@ -139,10 +181,25 @@ def main() -> int:
     ap.add_argument("--optical-fallback", action="store_true",
                     help="optical source only while the device link is silent")
     ap.add_argument("--camera", type=int, default=0)
+    ap.add_argument("--gui", action="store_true",
+                    help="launch native PySide6 desktop GUI")
+    ap.add_argument("--minimized", action="store_true",
+                    help="start minimized to system tray")
+    ap.add_argument("--headless", action="store_true",
+                    help="run terminal engine loop without GUI")
     ap.add_argument("--dashboard", action="store_true",
                     help="launch the telemetry HUD (FastAPI/WebSocket)")
     ap.add_argument("--dashboard-port", type=int, default=8080)
     args = ap.parse_args()
+
+    # Zero-argument or double-click / frozen executable default: launch GUI!
+    is_frozen = getattr(sys, "frozen", False)
+    has_explicit_cli_mode = (
+        args.self_test or args.doctor or args.headless or args.port
+        or args.bt_port or args.simulate or args.dry_run or args.duration
+    )
+    if (is_frozen or len(sys.argv) == 1 or args.gui or args.minimized) and not has_explicit_cli_mode:
+        return _launch_native_gui(args)
 
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(name)s %(levelname)s %(message)s")

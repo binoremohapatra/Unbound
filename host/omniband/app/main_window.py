@@ -33,6 +33,7 @@ from host.omniband.app.icu_view import IcuView
 from host.omniband.app.calibration_view import CalibrationView
 from host.omniband.app.hud_overlay import HudOverlay
 from host.omniband.app.tray_agent import SystemTrayAgent
+from host.omniband.app.auto_profile import AutoProfileWatcher, ProfileRule
 
 
 class MainWindow(QMainWindow):
@@ -85,12 +86,17 @@ class MainWindow(QMainWindow):
         btn_toggle_hud = QPushButton("Toggle Tactical HUD")
         btn_toggle_hud.clicked.connect(self._toggle_hud)
 
+        self._chk_lock_mode = QPushButton("🔓 Auto-Mode")
+        self._chk_lock_mode.setCheckable(True)
+        self._chk_lock_mode.toggled.connect(self._on_lock_mode_toggled)
+
         btn_release = QPushButton("⚠️ RELEASE ALL")
         btn_release.setObjectName("danger_btn")
         btn_release.clicked.connect(self._emergency_release_all)
 
         top_bar.addWidget(lbl_mode)
         top_bar.addWidget(self._combo_mode)
+        top_bar.addWidget(self._chk_lock_mode)
         top_bar.addSpacing(16)
         top_bar.addWidget(self._lbl_tier)
         top_bar.addStretch()
@@ -134,6 +140,39 @@ class MainWindow(QMainWindow):
         self.status = QStatusBar()
         self.status.showMessage("OmniBand somatic link active | 60 Hz host engine loop online")
         self.setStatusBar(self.status)
+
+        # Background 4 Hz Auto-Profile Watcher
+        self.watcher = AutoProfileWatcher(
+            on_rule_applied=self._on_auto_rule_applied,
+            on_release_all=self._emergency_release_all,
+        )
+        self.watcher.start()
+
+    def _on_auto_rule_applied(self, rule: ProfileRule) -> None:
+        self.calib.append_log(f"Auto-Hook: {rule.name} (Switching to Mode {rule.mode})")
+        self._combo_mode.setCurrentIndex(rule.mode)
+        if rule.show_hud:
+            self.hud.show()
+            self.hud.update_telemetry(
+                tier_name=self._lbl_tier.text(),
+                mode_name=rule.badge,
+                assist_name="ACTIVE",
+                veto_text="STATUS: HOOKED",
+                bar_vals=[0.3, 0.5, 0.4, 0.6]
+            )
+        else:
+            self.hud.hide()
+        self.status.showMessage(f"Mod Active: {rule.name}", 3000)
+
+    def _on_lock_mode_toggled(self, locked: bool) -> None:
+        if locked:
+            self._chk_lock_mode.setText("🔒 Locked")
+            self.watcher.lock_mode(self._combo_mode.currentIndex())
+            self.calib.append_log("Mode auto-switching locked by user.")
+        else:
+            self._chk_lock_mode.setText("🔓 Auto-Mode")
+            self.watcher.unlock_mode()
+            self.calib.append_log("Mode auto-switching unlocked.")
 
     def _toggle_visibility(self) -> None:
         if self.isVisible():

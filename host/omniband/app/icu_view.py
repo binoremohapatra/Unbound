@@ -112,3 +112,4 @@ class IcuView(QWidget):
         color = STATUS_ERR if ch in (0, 3) else BURNT_ORANGE
         self._lbl_status.setText(f"ACTIVE CALL: [CH{ch+1}] {phrase}")
         self._lbl_status.setStyleSheet(f"color: {color}; background: {SURFACE_2}; padding: 8px; border-radius: 4px; font-weight: bold;")
+

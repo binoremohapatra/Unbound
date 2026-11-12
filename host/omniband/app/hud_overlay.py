@@ -120,3 +120,4 @@ class HudOverlay(QWidget):
         self._lbl_veto.setText(veto_text)
         for i, val in enumerate(bar_vals[:4]):
             self._bars[i].setValue(int(val * 100))
+

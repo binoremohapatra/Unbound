@@ -46,6 +46,23 @@ class RealWebcamTracker:
         self._ch2_active = False
         self._ch4_active = False
 
+        # Auto-centering baseline calibration (first 15 frames)
+        self._calib_frames = 0
+        self._base_x = 0.0
+        self._base_y = 0.0
+        self._calibrated = False
+
+        # Head mouse state
+        self.head_mouse_enabled = False
+
+    def recenter(self) -> None:
+        """Trigger re-calibration of the resting neutral face center."""
+        self._calib_frames = 0
+        self._base_x = 0.0
+        self._base_y = 0.0
+        self._calibrated = False
+        log.info("Face baseline reset for re-centering")
+
     def start(self) -> bool:
         if self._running:
             return True
@@ -107,25 +124,53 @@ class RealWebcamTracker:
                     mx = moments["m10"] / moments["m00"]
                     my = moments["m01"] / moments["m00"]
 
-                    norm_x = (mx - (cx_end - cx_start) / 2.0) / ((cx_end - cx_start) / 2.0)
-                    norm_y = (my - (cy_end - cy_start) / 2.0) / ((cy_end - cy_start) / 2.0)
+                    # Calibration over first 15 frames
+                    if not self._calibrated:
+                        self._base_x += mx
+                        self._base_y += my
+                        self._calib_frames += 1
+                        if self._calib_frames >= 15:
+                            self._base_x /= 15.0
+                            self._base_y /= 15.0
+                            self._calibrated = True
+                            log.info("Face baseline calibrated to (%.1f, %.1f)", self._base_x, self._base_y)
+
+                    center_x = self._base_x if self._calibrated else (cx_end - cx_start) / 2.0
+                    center_y = self._base_y if self._calibrated else (cy_end - cy_start) / 2.0
+
+                    norm_x = (mx - center_x) / ((cx_end - cx_start) / 2.0)
+                    norm_y = (my - center_y) / ((cy_end - cy_start) / 2.0)
                     motion_intensity = min(1.0, float(moments["m00"]) / (total_area * 0.25))
 
-                    if norm_x < -0.15:
-                        ch1 = min(1.0, motion_intensity * abs(norm_x) * 2.0)
-                    elif norm_x > 0.15:
-                        ch2 = min(1.0, motion_intensity * norm_x * 2.0)
+                    # Strict ±18% neutral deadzone
+                    DEADZONE = 0.18
+                    if norm_x < -DEADZONE:
+                        ch1 = min(1.0, motion_intensity * ((abs(norm_x) - DEADZONE) / (1.0 - DEADZONE)) * 2.5)
+                    elif norm_x > DEADZONE:
+                        ch2 = min(1.0, motion_intensity * ((norm_x - DEADZONE) / (1.0 - DEADZONE)) * 2.5)
 
                     # Lower third of face roi: jaw / mouth region
                     jaw_roi = roi[int(roi.shape[0] * 0.65):, :]
                     jaw_moments = cv2.moments(jaw_roi)
-                    if jaw_moments["m00"] > 50:
+                    if jaw_moments["m00"] > 60:
                         jaw_intensity = min(1.0, float(jaw_moments["m00"]) / (jaw_roi.size * 0.35))
-                        if jaw_intensity > 0.15:
-                            ch4 = jaw_intensity
+                        if jaw_intensity > 0.22:
+                            ch4 = (jaw_intensity - 0.22) / 0.78
 
-                    if norm_y < -0.2:
-                        ch3 = min(1.0, motion_intensity * abs(norm_y) * 1.8)
+                    if norm_y < -DEADZONE:
+                        ch3 = min(1.0, motion_intensity * ((abs(norm_y) - DEADZONE) / (1.0 - DEADZONE)) * 2.0)
+
+                    # Webcam Head-Mouse feature: move Windows mouse cursor
+                    if self.head_mouse_enabled and (abs(norm_x) > DEADZONE or abs(norm_y) > DEADZONE):
+                        try:
+                            import ctypes
+                            dx = int((norm_x if abs(norm_x) > DEADZONE else 0.0) * 16)
+                            dy = int((norm_y if abs(norm_y) > DEADZONE else 0.0) * 16)
+                            pt = ctypes.wintypes.POINT()
+                            ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+                            ctypes.windll.user32.SetCursorPos(pt.x + dx, pt.y + dy)
+                        except Exception:
+                            pass
 
             self._prev_gray = gray
 

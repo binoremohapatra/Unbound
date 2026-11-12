@@ -35,6 +35,7 @@ from host.omniband.app.calibration_view import CalibrationView
 from host.omniband.app.hud_overlay import HudOverlay
 from host.omniband.app.tray_agent import SystemTrayAgent
 from host.omniband.app.auto_profile import AutoProfileWatcher, ProfileRule, get_active_process_win32
+from host.omniband.app.somatic_keyboard import SomaticKeyboardWidget
 from host.omniband.tracking.webcam_tracker import RealWebcamTracker
 from host.omniband.tracking.physical_keys import PhysicalKeyPoller
 
@@ -67,8 +68,22 @@ class MainWindow(QMainWindow):
         root_layout.setContentsMargins(12, 12, 12, 12)
         root_layout.setSpacing(8)
 
+        # Armed / Disarmed State (Starts DISARMED by default)
+        self.armed = False
+        self._cruise_w = False
+        self._sprint_shift = False
+        self._aim_ads = False
+
         # Top Bar: Mode Selector, Tier Indicator, HUD Toggle
         top_bar = QHBoxLayout()
+
+        self._btn_arm = QPushButton("🔴 DISARMED (SAFE) [F12]")
+        self._btn_arm.setObjectName("danger_btn")
+        self._btn_arm.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self._btn_arm.setCheckable(True)
+        self._btn_arm.setChecked(False)
+        self._btn_arm.clicked.connect(self._toggle_arm_disarm)
+
         lbl_mode = QLabel("Operational Mode:")
         lbl_mode.setFont(QFont("Segoe UI", 10, QFont.Bold))
         self._combo_mode = QComboBox()
@@ -94,13 +109,14 @@ class MainWindow(QMainWindow):
         self._chk_lock_mode.toggled.connect(self._on_lock_mode_toggled)
 
         self._chk_allow_all = QCheckBox("Allow All Windows (Desktop Test Mode)")
-        self._chk_allow_all.setChecked(True)
+        self._chk_allow_all.setChecked(False)  # Unchecked by default for safety
         self._chk_allow_all.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold;")
 
         btn_release = QPushButton("⚠️ RELEASE ALL")
         btn_release.setObjectName("danger_btn")
         btn_release.clicked.connect(self._emergency_release_all)
 
+        top_bar.addWidget(self._btn_arm)
         top_bar.addWidget(lbl_mode)
         top_bar.addWidget(self._combo_mode)
         top_bar.addWidget(self._chk_lock_mode)
@@ -135,6 +151,7 @@ class MainWindow(QMainWindow):
         # Main Tabs
         self.tabs = QTabWidget()
         self.scope = OscilloscopeWidget()
+        self.keyboard = SomaticKeyboardWidget(on_type_fn=self._inject_keyboard_char)
         self.arena = ArenaWidget()
         self.icu = IcuView()
         self.calib = CalibrationView()
@@ -142,6 +159,19 @@ class MainWindow(QMainWindow):
         # Camera Preview Tab
         self.camera_tab = QWidget()
         cam_layout = QVBoxLayout(self.camera_tab)
+
+        cam_ctrls = QHBoxLayout()
+        self._btn_recenter = QPushButton("🎯 Recenter Face (Zero)")
+        self._btn_recenter.clicked.connect(lambda: self.webcam_tracker.recenter())
+
+        self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse + Dwell Click")
+        self._chk_head_mouse.toggled.connect(lambda chk: setattr(self.webcam_tracker, "head_mouse_enabled", chk))
+
+        cam_ctrls.addWidget(self._btn_recenter)
+        cam_ctrls.addWidget(self._chk_head_mouse)
+        cam_ctrls.addStretch()
+        cam_layout.addLayout(cam_ctrls)
+
         self.camera_lbl = QLabel("Initializing Real Webcam (cv2)...")
         self.camera_lbl.setAlignment(Qt.AlignCenter)
         self.camera_lbl.setMinimumSize(480, 360)
@@ -149,6 +179,7 @@ class MainWindow(QMainWindow):
         cam_layout.addWidget(self.camera_lbl)
 
         self.tabs.addTab(self.scope, "Oscilloscope (Signal)")
+        self.tabs.addTab(self.keyboard, "⌨️ Hands-Free Keyboard")
         self.tabs.addTab(self.camera_tab, "Live Webcam (Face & Jaw)")
         self.tabs.addTab(self.arena, "Cyber-Arena (Native 60 FPS)")
         self.tabs.addTab(self.icu, "ICU Patient Board")
@@ -193,10 +224,11 @@ class MainWindow(QMainWindow):
         )
         self.webcam_tracker.start()
 
-        # Physical Key Poller (F7-F10)
+        # Physical Key Poller (F7-F10 + F12)
         self.key_poller = PhysicalKeyPoller(
             on_edge=self._on_physical_edge,
             on_envelopes=self._on_key_envelopes,
+            on_f12_toggle=self._toggle_arm_disarm,
         )
         self.key_poller.start()
 
@@ -229,19 +261,78 @@ class MainWindow(QMainWindow):
     def _on_key_envelopes(self, vals: list[float], active: list[bool]) -> None:
         self.scope.push_sample(vals, active)
 
-    def _on_optical_gesture(self, ch: int, down: bool, amp: float) -> None:
-        """Inject real OS keys and mouse inputs from facial motion and jaw drop."""
+    def _toggle_arm_disarm(self) -> None:
+        self.armed = not self.armed
+        if self.armed:
+            self._btn_arm.setText("🟢 ARMED (LIVE) [F12]")
+            self._btn_arm.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
+            self.status.showMessage("⚠️ SYSTEM ARMED: Real inputs are actively injected into Windows", 4000)
+            self.calib.append_log("SYSTEM ARMED: Real hardware inputs enabled.")
+        else:
+            self._btn_arm.setText("🔴 DISARMED (SAFE) [F12]")
+            self._btn_arm.setStyleSheet(f"background-color: {STATUS_ERR}; color: white; font-weight: bold;")
+            self.gw.release_all("disarmed by operator")
+            self.status.showMessage("SYSTEM DISARMED: All keys released. Safe mode active.", 4000)
+            self.calib.append_log("SYSTEM DISARMED: All keys released.")
+
+    def _inject_keyboard_char(self, char: str) -> None:
+        """Inject character typed from Somatic Keyboard into active target app."""
+        if not self.armed:
+            return
         from core.events import OutputCommand
         cmds = []
+        if char == "backspace":
+            cmds.append(OutputCommand(kind="key", name="backspace", pressed=True))
+            cmds.append(OutputCommand(kind="key", name="backspace", pressed=False))
+        elif char == "\n":
+            cmds.append(OutputCommand(kind="key", name="enter", pressed=True))
+            cmds.append(OutputCommand(kind="key", name="enter", pressed=False))
+        elif char == " ":
+            cmds.append(OutputCommand(kind="key", name="space", pressed=True))
+            cmds.append(OutputCommand(kind="key", name="space", pressed=False))
+        elif len(char) == 1 and char.isalpha():
+            cmds.append(OutputCommand(kind="key", name=char.lower(), pressed=True))
+            cmds.append(OutputCommand(kind="key", name=char.lower(), pressed=False))
+
+        if cmds:
+            self.gw.apply(cmds)
+            self.gw.flush(time.perf_counter())
+
+    def _on_optical_gesture(self, ch: int, down: bool, amp: float) -> None:
+        """Inject real OS keys and mouse inputs from facial motion and jaw drop."""
+        if not self.armed:
+            return
         now_str = time.strftime("%H:%M:%S")
 
+        # In Keyboard Tab: Route channels to Grid Navigation & Typing
+        if self.tabs.currentIndex() == 1:
+            if down:
+                if ch == 1:  # Face Left
+                    self.keyboard.move_left()
+                    self._lbl_proof_last.setText(f"KEYBOARD: ← (Left) @ {now_str}")
+                elif ch == 2:  # Face Right
+                    self.keyboard.move_right()
+                    self._lbl_proof_last.setText(f"KEYBOARD: → (Right) @ {now_str}")
+                elif ch == 3:  # Face Up / Nod
+                    self.keyboard.move_down_row()
+                    self._lbl_proof_last.setText(f"KEYBOARD: ↓ (Next Row) @ {now_str}")
+                elif ch == 4:  # Jaw Drop
+                    self.keyboard.type_selected()
+                    self._lbl_proof_last.setText(f"KEYBOARD: Selected Key Typed @ {now_str}")
+            return
+
+        # Target gating check
         if not self._chk_allow_all.isChecked():
             proc = get_active_process_win32()
             exe_lower = proc.exe_name.lower()
-            allowed = ["cyberpunk2077.exe", "notepad.exe", "unbound.exe"]
+            allowed = ["cyberpunk2077.exe", "notepad.exe", "unbound.exe", "forzahorizon5.exe", "gta5.exe"]
             if not any(a in exe_lower for a in allowed):
                 return
 
+        from core.events import OutputCommand
+        cmds = []
+
+        # Full 10-Action Game Control:
         # CH1: Face Left -> A (Steer Left)
         if ch == 1:
             cmds.append(OutputCommand(kind="key", name="a", pressed=down))
@@ -250,7 +341,7 @@ class MainWindow(QMainWindow):
         elif ch == 2:
             cmds.append(OutputCommand(kind="key", name="d", pressed=down))
             self._lbl_proof_last.setText(f"LAST: Face R -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
-        # CH4: Jaw Drop -> Left Click / Action
+        # CH4: Jaw Drop -> Left Click / Primary Fire
         elif ch == 4:
             cmds.append(OutputCommand(kind="button", name="left", pressed=down))
             self._lbl_proof_last.setText(f"LAST: Jaw Drop -> Left Click ({'DOWN' if down else 'UP'}) @ {now_str}")
@@ -260,18 +351,39 @@ class MainWindow(QMainWindow):
             self.gw.flush(time.perf_counter())
 
     def _on_physical_edge(self, ch: int, down: bool, amp: float) -> None:
-        from core.events import OutputCommand
-        cmds = []
+        if not self.armed:
+            return
         now_str = time.strftime("%H:%M:%S")
 
-        # Check target gating
+        # In Keyboard Tab: Route F7-F10 to Grid Navigation & Typing
+        if self.tabs.currentIndex() == 1:
+            if down:
+                if ch == 1:  # F7 -> Move Left
+                    self.keyboard.move_left()
+                    self._lbl_proof_last.setText(f"KEYBOARD: F7 -> ← (Left) @ {now_str}")
+                elif ch == 2:  # F8 -> Move Right
+                    self.keyboard.move_right()
+                    self._lbl_proof_last.setText(f"KEYBOARD: F8 -> → (Right) @ {now_str}")
+                elif ch == 3:  # F9 -> Next Row
+                    self.keyboard.move_down_row()
+                    self._lbl_proof_last.setText(f"KEYBOARD: F9 -> ↓ (Row) @ {now_str}")
+                elif ch == 4:  # F10 -> Type Key
+                    self.keyboard.type_selected()
+                    self._lbl_proof_last.setText(f"KEYBOARD: F10 -> Type Selected @ {now_str}")
+            return
+
+        # Target gating check
         if not self._chk_allow_all.isChecked():
             proc = get_active_process_win32()
             exe_lower = proc.exe_name.lower()
-            allowed = ["cyberpunk2077.exe", "notepad.exe", "unbound.exe"]
+            allowed = ["cyberpunk2077.exe", "notepad.exe", "unbound.exe", "forzahorizon5.exe", "gta5.exe"]
             if not any(a in exe_lower for a in allowed):
                 return
 
+        from core.events import OutputCommand
+        cmds = []
+
+        # Full 10-Action Somatic Game Control:
         # F7 -> CH1 (A / Steer L)
         if ch == 1:
             cmds.append(OutputCommand(kind="key", name="a", pressed=down))
@@ -280,11 +392,13 @@ class MainWindow(QMainWindow):
         elif ch == 2:
             cmds.append(OutputCommand(kind="key", name="d", pressed=down))
             self._lbl_proof_last.setText(f"LAST: F8 -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
-        # F9 -> CH3 (W / Throttle)
+        # F9 -> CH3 (Cruise Latch Toggle: W)
         elif ch == 3:
-            cmds.append(OutputCommand(kind="key", name="w", pressed=down))
-            self._lbl_proof_last.setText(f"LAST: F9 -> Key 'w' ({'DOWN' if down else 'UP'}) @ {now_str}")
-        # F10 -> CH4 (Left Click / Space)
+            if down:
+                self._cruise_w = not self._cruise_w
+                cmds.append(OutputCommand(kind="key", name="w", pressed=self._cruise_w))
+                self._lbl_proof_last.setText(f"LAST: F9 -> Cruise Latch 'w' ({'ON' if self._cruise_w else 'OFF'}) @ {now_str}")
+        # F10 -> CH4 (Left Click / Space / Handbrake)
         elif ch == 4:
             cmds.append(OutputCommand(kind="button", name="left", pressed=down))
             self._lbl_proof_last.setText(f"LAST: F10 -> Mouse Left ({'DOWN' if down else 'UP'}) @ {now_str}")

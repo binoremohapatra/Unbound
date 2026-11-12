@@ -86,8 +86,9 @@ def test_main_window_init(qapp):
     from host.omniband.app.main_window import MainWindow
 
     win = MainWindow()
-    assert win.tabs.count() == 5  # Scope, Camera, Arena, ICU, Calibration
+    assert win.tabs.count() == 6  # Scope, Keyboard, Camera, Arena, ICU, Calibration
     assert win.scope is not None
+    assert win.keyboard is not None
     assert win.arena is not None
     assert win.icu is not None
     assert win.calib is not None

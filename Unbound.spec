@@ -22,6 +22,7 @@ hiddenimports = [
     'host.omniband.app.main_window',
     'host.omniband.app.auto_profile',
     'host.omniband.app.startup_registry',
+    'host.omniband.app.somatic_keyboard',
     'host.omniband.tracking.webcam_tracker',
     'host.omniband.tracking.physical_keys',
     'host.omniband.copilot.types',

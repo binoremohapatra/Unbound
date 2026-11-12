@@ -196,10 +196,114 @@ class SendInputBackend:
 
 
 # ------------------------------------------------------------------ gateway
+GATED_MOVEMENT_KEYS: frozenset[str] = frozenset({
+    "w", "a", "s", "d", "space", "shift", "lshift", "rshift", "ctrl", "lctrl", "rctrl",
+})
+
+
+class ProcessGate:
+    """Sink-level defence-in-depth gate (K-03).
+
+    Verifies foreground window on EVERY press decision via QueryFullProcessImageNameW.
+    Gated movement/gaming scancodes are allowed ONLY if:
+      1. Foreground executable matches an allow-listed game (e.g. 'cyberpunk2077.exe', 'forzahorizon5.exe', 'gta5.exe')
+      2. OR Foreground executable is 'unbound.exe' with window title matching 'Cyber-Arena'
+    If unreadable/access-denied/different app: GATE IS CLOSED.
+    """
+
+    def __init__(self, allowlist: Optional[list[str]] = None, allow_all: bool = False) -> None:
+        self.allowlist = [a.lower() for a in (allowlist or ["cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"])]
+        self.allow_all: bool = allow_all
+        self.blocked_count: int = 0
+        self._provider = None
+        self._proc_cache: dict[int, tuple[float, str, str]] = {}
+
+    def set_foreground_provider(self, fn) -> None:
+        """Testing hook to provide fake (exe_name, window_title) without Win32 calls."""
+        self._provider = fn
+
+    def query_foreground(self) -> tuple[str, str]:
+        """Return (exe_name_lower, window_title) evaluated on the current tick."""
+        if self._provider is not None:
+            res = self._provider()
+            return (res[0].lower() if res[0] else "", res[1] or "")
+
+        if os.name != "nt":
+            return ("", "")
+
+        try:
+            import time
+            u32, k32 = ctypes.windll.user32, ctypes.windll.kernel32
+            hwnd = u32.GetForegroundWindow()
+            if not hwnd:
+                return ("", "")
+
+            pid = ctypes.c_ulong(0)
+            u32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+            if pid.value == 0:
+                return ("", "")
+
+            title_len = u32.GetWindowTextLengthW(hwnd)
+            title_buf = ctypes.create_unicode_buffer(title_len + 1)
+            u32.GetWindowTextW(hwnd, title_buf, title_len + 1)
+            title = title_buf.value
+
+            now = time.perf_counter()
+            cached = self._proc_cache.get(pid.value)
+            if cached and (now - cached[0] < 0.25):
+                return (cached[1], title)
+
+            h = k32.OpenProcess(0x1000, False, pid.value)  # PROCESS_QUERY_LIMITED_INFORMATION
+            exe = ""
+            if h:
+                buf = ctypes.create_unicode_buffer(520)
+                size = ctypes.c_ulong(520)
+                if k32.QueryFullProcessImageNameW(h, 0, buf, ctypes.byref(size)):
+                    exe = os.path.basename(buf.value).lower()
+                k32.CloseHandle(h)
+
+            self._proc_cache[pid.value] = (now, exe, title)
+            return (exe, title)
+        except Exception as e:
+            log.debug("ProcessGate win32 query failed: %s", e)
+            return ("", "")
+
+    def is_key_allowed(self, key_name: str) -> bool:
+        """Check if key is allowed to be pressed in the current foreground window."""
+        if self.allow_all:
+            return True
+
+        k = key_name.lower()
+        if k not in GATED_MOVEMENT_KEYS:
+            return True
+
+        exe, title = self.query_foreground()
+        if not exe:
+            self.blocked_count += 1
+            log.warning("LEAK_BLOCKED: key '%s' dropped (foreground process unverified)", k)
+            return False
+
+        for allowed in self.allowlist:
+            if allowed in exe:
+                return True
+
+        if "unbound" in exe and "cyber-arena" in title.lower():
+            return True
+
+        self.blocked_count += 1
+        log.warning("LEAK_BLOCKED: key '%s' dropped because foreground is '%s' (%s)", k, exe, title)
+        return False
+
+
 class Gateway:
     def __init__(self, backend: Backend, button_map: Optional[dict] = None,
-                 axis_map: Optional[dict] = None):
+                 axis_map: Optional[dict] = None, process_gate: Optional[ProcessGate] = None):
         self.backend = backend
+        if process_gate is None:
+            allow_all = type(backend).__name__ == "RecordingBackend"
+            self.process_gate = ProcessGate(allow_all=allow_all)
+        else:
+            self.process_gate = process_gate
         self.button_map = dict(BUTTON_MAP, **(button_map or {}))
         self.axis_map = dict(AXIS_MAP, **(axis_map or {}))
         self._lock = threading.RLock()
@@ -335,10 +439,18 @@ class Gateway:
 
     def _sync_locked(self, dx: int = 0, dy: int = 0) -> None:
         want_k = self._want_keys | self._axis_desired_keys()
+
+        # Sink-level process gate (K-03): filter movement keys against active foreground process
+        filtered_want_k: set[str] = set()
+        for k in want_k:
+            if self.process_gate.is_key_allowed(k):
+                filtered_want_k.add(k)
+        want_k = filtered_want_k
+
         b = self.backend
-        for k in self._held_keys - want_k:             # releases first
+        for k in self._held_keys - want_k:             # releases first (releases blocked keys immediately)
             b.key(k, False)
-        for k in want_k - self._held_keys:
+        for k in want_k - self._held_keys:             # presses second
             b.key(k, True)
         for m in self._held_mouse - self._want_mouse:
             b.mouse_button(m, False)

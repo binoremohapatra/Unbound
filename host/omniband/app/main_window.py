@@ -16,12 +16,13 @@ from __future__ import annotations
 
 import sys
 import time
+import threading
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QLabel, QPushButton, QComboBox, QStatusBar, QMessageBox, QApplication,
     QSystemTrayIcon, QCheckBox, QSlider
 )
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QIcon, QFont, QCloseEvent, QImage, QPixmap
 
 from host.omniband.app.theme import (
@@ -45,10 +46,16 @@ from host.omniband.tracking.physical_keys import PhysicalKeyPoller
 class MainWindow(QMainWindow):
     """OmniBand Native Desktop Command Center."""
 
+    sig_biometric_click = Signal()
+    sig_drag_toggle = Signal()
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("OmniBand Command Center")
         self.resize(1024, 680)
+
+        self.sig_biometric_click.connect(self._on_biometric_click)
+        self.sig_drag_toggle.connect(self._toggle_drag_lock)
 
         # Child windows & agents
         self.hud = HudOverlay()
@@ -197,14 +204,14 @@ class MainWindow(QMainWindow):
         self._chk_head_mouse.setChecked(True)
         self._chk_head_mouse.toggled.connect(lambda chk: setattr(self.webcam_tracker, "head_mouse_enabled", chk))
 
-        # Pointer Speed Slider (0.5x to 3.0x)
+        # Pointer Speed Slider (0.2x to 2.5x)
         lbl_speed_title = QLabel("Pointer Speed:")
         lbl_speed_title.setFont(QFont("Cascadia Code", 9, QFont.Bold))
         self._slider_speed = QSlider(Qt.Horizontal)
-        self._slider_speed.setRange(5, 30)
-        self._slider_speed.setValue(12)  # 1.2x
+        self._slider_speed.setRange(2, 25)
+        self._slider_speed.setValue(6)  # 0.6x calm default
         self._slider_speed.setFixedWidth(110)
-        self._lbl_speed_val = QLabel("1.2x")
+        self._lbl_speed_val = QLabel("0.6x")
         self._lbl_speed_val.setFont(QFont("Cascadia Code", 9))
         self._slider_speed.valueChanged.connect(self._on_speed_slider_changed)
 
@@ -219,6 +226,10 @@ class MainWindow(QMainWindow):
         self._lbl_smooth_val.setFont(QFont("Cascadia Code", 9))
         self._slider_smooth.valueChanged.connect(self._on_smooth_slider_changed)
 
+        self._chk_double_click = QCheckBox("Double-Click Mode (Desktop Icons)")
+        self._chk_double_click.setChecked(False)
+        self._chk_double_click.setToolTip("When checked, blink gesture sends a true OS Double-Click to open desktop apps/folders.")
+
         cam_ctrls.addWidget(self._btn_recenter)
         cam_ctrls.addWidget(self._chk_head_mouse)
         cam_ctrls.addSpacing(12)
@@ -229,6 +240,8 @@ class MainWindow(QMainWindow):
         cam_ctrls.addWidget(lbl_smooth_title)
         cam_ctrls.addWidget(self._slider_smooth)
         cam_ctrls.addWidget(self._lbl_smooth_val)
+        cam_ctrls.addSpacing(12)
+        cam_ctrls.addWidget(self._chk_double_click)
         cam_ctrls.addStretch()
         cam_layout.addLayout(cam_ctrls)
 
@@ -280,6 +293,9 @@ class MainWindow(QMainWindow):
         from gateway import Gateway, SendInputBackend
         self.gw = Gateway(SendInputBackend())
         self.gw.install_exit_handlers()
+        if hasattr(self, "_chk_allow_all"):
+            self.gw.process_gate.allow_all = self._chk_allow_all.isChecked()
+            self._chk_allow_all.toggled.connect(lambda chk: setattr(self.gw.process_gate, "allow_all", chk))
 
         # Real Optical Webcam Tracker (GameFace 468-point 3D FaceMesh + 1-Euro filter)
         self.webcam_tracker = RealWebcamTracker(
@@ -287,8 +303,8 @@ class MainWindow(QMainWindow):
             on_envelopes=self._on_optical_envelopes,
             on_frame=self._on_webcam_frame,
             on_gesture=self._on_optical_gesture,
-            on_click=self._on_biometric_click,
-            on_drag_toggle=self._toggle_drag_lock,
+            on_click=self.sig_biometric_click.emit,
+            on_drag_toggle=self.sig_drag_toggle.emit,
         )
         self.webcam_tracker.start()
 
@@ -330,10 +346,12 @@ class MainWindow(QMainWindow):
             pix = QPixmap.fromImage(qimg).scaled(480, 360, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.camera_lbl.setPixmap(pix)
             # Live Biometric Telemetry update
+            ear_str = f"{self.webcam_tracker.current_ear:.2f}" if self.webcam_tracker.current_ear is not None else "--"
+            mar_str = f"{self.webcam_tracker.current_mar:.2f}" if self.webcam_tracker.current_mar is not None else "--"
             self._lbl_cam_telemetry.setText(
                 f"FPS: {self.webcam_tracker.fps:4.1f} | "
-                f"EAR: {self.webcam_tracker.current_ear:.2f} | "
-                f"MAR: {self.webcam_tracker.current_mar:.2f} | "
+                f"EAR: {ear_str} | "
+                f"MAR: {mar_str} | "
                 f"YAW: {self.webcam_tracker.head_yaw:+4.1f}° | "
                 f"PITCH: {self.webcam_tracker.head_pitch:+4.1f}°"
             )
@@ -386,19 +404,77 @@ class MainWindow(QMainWindow):
                 pass
 
     def _on_biometric_click(self) -> None:
-        """Triggered by EAR double-blink or MAR quick jaw tap."""
+        """Triggered by EAR double-blink, deliberate long blink, or MAR quick jaw tap."""
         if hasattr(self, "reticle"):
             self.reticle.trigger_click_flash()
-        if not self.armed:
+        if hasattr(self, "_chk_head_mouse") and not self._chk_head_mouse.isChecked():
             return
-        if sys.platform == "win32":
+
+        def _execute_click() -> None:
+            if sys.platform != "win32":
+                return
             try:
                 import ctypes
-                ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
-                time.sleep(0.015)
-                ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                from ctypes import wintypes
+                user32 = ctypes.windll.user32
+
+                MOUSEEVENTF_LEFTDOWN = 0x0002
+                MOUSEEVENTF_LEFTUP = 0x0004
+
+                class MOUSEINPUT(ctypes.Structure):
+                    _fields_ = [
+                        ("dx", wintypes.LONG),
+                        ("dy", wintypes.LONG),
+                        ("mouseData", wintypes.DWORD),
+                        ("dwFlags", wintypes.DWORD),
+                        ("time", wintypes.DWORD),
+                        ("dwExtraInfo", ctypes.c_size_t),
+                    ]
+
+                class INPUT_UNION(ctypes.Union):
+                    _fields_ = [("mi", MOUSEINPUT)]
+
+                class INPUT(ctypes.Structure):
+                    _fields_ = [
+                        ("type", wintypes.DWORD),
+                        ("u", INPUT_UNION),
+                    ]
+
+                def _click_once() -> None:
+                    inp_down = INPUT(type=0, u=INPUT_UNION(mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, 0)))
+                    inp_up = INPUT(type=0, u=INPUT_UNION(mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, 0)))
+                    # Try SendInput first
+                    res1 = user32.SendInput(1, ctypes.byref(inp_down), ctypes.sizeof(INPUT))
+                    if res1 == 0:
+                        user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+
+                    time.sleep(0.045)  # Natural human button dwell
+
+                    res2 = user32.SendInput(1, ctypes.byref(inp_up), ctypes.sizeof(INPUT))
+                    if res2 == 0:
+                        user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+                is_dbl = hasattr(self, "_chk_double_click") and self._chk_double_click.isChecked()
+                _click_once()
+                if is_dbl:
+                    time.sleep(0.065)
+                    _click_once()
             except Exception:
-                pass
+                try:
+                    import ctypes
+                    user32 = ctypes.windll.user32
+                    user32.mouse_event(0x0002, 0, 0, 0, 0)
+                    time.sleep(0.045)
+                    user32.mouse_event(0x0004, 0, 0, 0, 0)
+                    if hasattr(self, "_chk_double_click") and self._chk_double_click.isChecked():
+                        time.sleep(0.065)
+                        user32.mouse_event(0x0002, 0, 0, 0, 0)
+                        time.sleep(0.045)
+                        user32.mouse_event(0x0004, 0, 0, 0, 0)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_execute_click, daemon=True, name="biometric-clicker").start()
         self.calib.append_log("BIOMETRIC: Left Click registered via facial gesture")
         now_str = time.strftime("%H:%M:%S")
         self._lbl_proof_last.setText(f"LAST INJECTION: LEFT CLICK (BIOMETRIC GESTURE) @ {now_str}")
@@ -440,7 +516,7 @@ class MainWindow(QMainWindow):
 
     def _toggle_drag_lock(self) -> None:
         """Toggle Left Mouse Button drag latch."""
-        if not self.armed:
+        if hasattr(self, "_chk_head_mouse") and not self._chk_head_mouse.isChecked():
             return
         from core.events import OutputCommand
         self._drag_latch = not self._drag_latch
@@ -453,7 +529,7 @@ class MainWindow(QMainWindow):
 
     def _inject_mouse_scroll(self, delta: int) -> None:
         """Inject Win32 mouse wheel scroll without stealing focus."""
-        if not self.armed:
+        if hasattr(self, "_chk_head_mouse") and not self._chk_head_mouse.isChecked():
             return
         try:
             import ctypes

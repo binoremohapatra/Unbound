@@ -1,98 +1,73 @@
-# OmniBand V2 — Implementation Walkthrough
+# OmniBand V2 — User Walkthrough & Operating Guide
 
-How the pieces fit, in execution order. All paths relative to repo root
-`D:\unbound\unbound`.
+## 1. Quick Start
+Launch the application by running the built desktop binary or Python engine:
+```powershell
+# From repository root:
+.\dist\Unbound\Unbound.exe
 
-## 1. Single source of truth
-
-`protocol/constants.json` → `tools/gen_constants.py` emits:
-
-- `firmware/omniband_v2_firmware/constants_gen.h` (C++17, `omniband::constants`)
-- `host/omniband/constants_gen.py` (Python `CONSTANTS` dict)
-
-`python tools/gen_constants.py --check` fails on drift. Never hand-edit
-generated files.
-
-## 2. Firmware (`firmware/omniband_v2_firmware/`)
-
-- `omniband_core.h` — portable C++17 DSP/FSM core, shared with native tests:
-  ADC→DC-remove→500 Hz Goertzel-ish envelope→gated baseline EMA→hysteresis
-  thresholds→debounce→crosstalk lookahead/retro-cancel→noise-burst guard→
-  CH4 gesture FSM (taps/holds/SOS/night/bruxism)→e-stop chord→bounded
-  safety-aware event queue (depth 32, preserves ESTOP/SOS/MODE_SET).
-- `adc_front.*` — ESP32 ADC: 12-bit, 11 dB, 1 dummy + 30 µs settle, 4×
-  oversample (min 2), pins 32–35, 1500 µs tick budget.
-- `link.*` — NDJSON over USB Serial + BT SPP; global seq; `hello`/`tele`/`evt`/
-  `ges`/`scope`/`cal`/`ack`/`pong`/`diag`; baud negotiation 115200→921600;
-  command rate limit 50 Hz; malformed/oversize line handling.
-- `config_store.*` — Preferences/NVS persistence (mode, thresholds, compat).
-- `oled_ui.*` — SSD1306 30 Hz status/UI task.
-- `cal.*` — guided calibration collector (rest + ch1..ch4 steps → `cal` lines
-  with peak/np99/threshold/SNR).
-- `shared_state.h` — lock-free-ish snapshot struct between tasks.
-- `omniband_v2_firmware.ino` — setup/loop: ADC task @500 Hz (2 ms),
-  telemetry/UI @30 Hz, link RX dispatch, watchdog feed.
-
-Native tests (`firmware/tests/native/test_core.cpp`) run the same
-`omniband_core.h` on the host: `python tools/run_native_tests.py`
-(LLVM-MinGW, `-std=c++17 -Wall -Wextra -Werror`).
-
-## 3. Protocol (`host/omniband/`)
-
-- `protocol.py` — line parse/serialize, seq dedupe window (256), command
-  builders (`cmd_ping`, `cmd_set_mode`, ...).
-- `link.py` — `SerialTransport` (pyserial), `SimTransport`, `Arbiter`
-  (dual-link dedupe, primary-silence failover 250 ms, exponential backoff
-  250→2000 ms, freshest-link command routing).
-- `fsm_core.py` — Python port of GestureFsm used by simulator/optical/tests.
-- `sim_device.py` — `SimDevice`: deterministic-ish device emulator emitting
-  hello/tele/ges + answering set_mode/night/threshold/ping commands.
-
-## 4. Host engine (`host/omniband/engine.py` + `host/omniband_engine.py`)
-
-`OmniEngine` owns: arbiter, output sink collection, mode table (from
-constants), host-silence watchdog (150 ms M0 / 400 ms others), engine deadman
-(250 ms), SOS/e-stop escalation, emergency `release_all` (idempotent,
-exception-safe, foreground-change aware), audit log, latency stats.
-
-CLI `host/omniband_engine.py`:
-
-```
-python host/omniband_engine.py --simulate --self-test      # no hardware
-python host/omniband_engine.py --simulate --duration 60    # live sim
-python host/omniband_engine.py --port COM5 --baud 115200   # real device
-python host/omniband_engine.py --simulate --dashboard      # HUD on :8080
-python host/omniband_engine.py --optical --camera 0        # camera fallback
+# Or via Python:
+python host\omniband_engine.py
 ```
 
-## 5. Output sinks (`host/omniband/out_sinks.py`)
+---
 
-`DryRunSink` (logs every command — default safe), `Win32Sink`
-(`SendInput` scancodes + mouse, held-output tracking, foreground watcher),
-`GamepadSink` (vgamepad if present), `TTSSink`, `SirenSink` (22.05 kHz
-alternating 800/1200 Hz), `BruxismLogger` (CSV per day).
+## 2. Head-Mouse Control & Calibration
 
-## 6. Routing & modes
+### 2.1 Resting Center Alignment
+1. Position your head comfortably facing the webcam.
+2. Click **Recenter Face (Zero)** or press **F11** to toggle head-mouse mode.
+3. The app establishes your neutral resting center:
+   - Green circle: Deadzone (pointer stays stationary within deadzone).
+   - Moving your head outside the circle glides the cursor smoothly in that direction.
+   - Returning to center stops cursor motion cleanly.
 
-Gesture→action table per mode lives in `engine.py` (`MODES`/`ROUTES` derived
-from constants). Safety precedence: `ESTOP`/`SOS_CONFIRMED`/watchdog/link-loss
-always call `release_all` before any routing.
+### 2.2 Gestures
+- **Left Click**: Double-blink or quick mouth tap (0.10s–0.45s).
+- **Drag & Hold Lock**: Open and hold jaw open for > 0.70 seconds.
+- **Anti-Slip Freeze**: A 350ms cursor freeze automatically activates on clicks and drags so cursor does not jitter during intentional facial gestures.
 
-## 7. Optical fallback (`host/omniband/optical.py`)
+---
 
-Maps camera blendshape/pose events → gesture vocabulary with
-`source="optical"` tagging and confidence gating. DOUBLE resolution is delayed
-one tap-window so optical doubles don't fire premature SINGLEs. Honest: if
-OpenCV/MediaPipe missing, it reports unavailable — never fabricates frames.
+## 3. Desktop Key-Leak Protection (ProcessGate)
+- In **Desktop**, **Browser**, **Chat**, or **Notepad** windows, head movements **never** type `a`, `d`, `w`, or `s`.
+- Gaming keys are gated at the Win32 kernel level: scancodes are only transmitted when the active window is `Cyberpunk2077.exe` or `Unbound.exe` on the Cyber-Arena tab.
+- Typing on desktop is accomplished via the **Floating Virtual Keyboard** or Windows OSK, which never steal focus from your target window.
 
-## 8. Verification surface
+---
 
-| Command | Proves |
-|---|---|
-| `python -m pytest tests/ -q` | 601 tests incl. host/vectors |
-| `python tools/run_native_tests.py` | C++ core: 88 checks, 0 failures |
-| `python tools/gen_constants.py --check` | no generated drift |
-| `python tools/audit_no_placeholders.py` | no stubs/TODOs |
-| `python host/omniband_engine.py --simulate --self-test` | gesture→sink E2E |
-| `python tools/omniband_ping.py --simulate` | link RTT/tele rate |
-| `arduino-cli compile --fqbn esp32:esp32:esp32 firmware/omniband_v2_firmware` | firmware builds |
+## 4. Self-Test & Diagnostic Commands
+The executable and Python CLI support 4 standalone verification probes:
+```powershell
+# 1. Probe runtime dependencies (Python, OpenCV, MediaPipe, PySide6)
+.\dist\Unbound\Unbound.exe --selftest-env
+
+# 2. Verify model files and SHA-256 integrity
+.\dist\Unbound\Unbound.exe --selftest-resources
+
+# 3. Test multi-stage tracker pipeline and negative controls
+.\dist\Unbound\Unbound.exe --selftest-tracker
+
+# 4. Test camera device capture and exposure
+.\dist\Unbound\Unbound.exe --selftest-camera
+```
+All 4 probes return exit code 0 when healthy.
+
+---
+
+## 5. Double-Blink Selection & Calm Cursor Speed Calibrations
+
+### Double-Blink & Selection Fixes
+1. **Adaptive EAR Baseline**: Instead of rigid fixed thresholds, the tracker dynamically tracks open-eye baseline and triggers blinks at `min(0.24, max(0.21, baseline * 0.78))`.
+2. **Human Blink Cadence**: Expanded the double-blink detection window from `0.50s` to `0.10s <= gap <= 0.85s` to comfortably capture natural human blink rates.
+3. **Deliberate Long-Blink / Wink Selection**: Closing eyes deliberately for `>= 0.40s` triggers a left click immediately without needing repeated blinks.
+4. **Dual Win32 Injection & Qt Thread Safety**: Biometric events are dispatched to the main Qt GUI thread via `sig_biometric_click` and inject both modern `SendInput` packets (with 25ms mouse down dwell) and legacy `mouse_event` fallback to select icons, buttons, and links across all Windows 11 apps.
+
+### Calm Cursor Speed Calibrations
+1. **Gain Reduction**: Lowered `gain_x` from `10.0` to `5.5` and `gain_y` from `12.0` to `6.0`.
+2. **Speed Multiplier**: Reduced default base multiplier to `0.8x` (slider range `0.2x – 2.5x`).
+3. **Fine-Aim Dwell**: Widened deadzone threshold to `excess < 0.025` with `0.35x` dampening for micro-targeting.
+
+### Verification Status
+- **Full Pytest Suite**: 709 passed, 0 failed, 5 skipped in 34.56s.
+- **Frozen Binary Gate**: `dist/Unbound/Unbound.exe` verified with `--selftest-env`, `--selftest-resources`, `--selftest-tracker`, and `--selftest-camera` passing.

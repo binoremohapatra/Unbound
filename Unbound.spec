@@ -8,6 +8,7 @@ mp_datas, mp_binaries, mp_hidden = collect_all('mediapipe')
 datas = [
     ('host/profiles/*.json', 'host/profiles'),
     ('protocol/constants.json', 'protocol'),
+    ('models/*', 'models'),
     ('face_landmarker.task', '.'),
 ] + mp_datas
 
@@ -28,6 +29,7 @@ hiddenimports = [
     'host.omniband.app.somatic_keyboard',
     'host.omniband.app.floating_keyboard',
     'host.omniband.app.cursor_reticle',
+    'host.omniband.tracking.paths',
     'host.omniband.tracking.webcam_tracker',
     'host.omniband.tracking.physical_keys',
     'host.omniband.copilot.types',
@@ -35,6 +37,7 @@ hiddenimports = [
     'host.omniband.copilot.sim.track',
     'host.omniband.adapters.telemetry.native_arena',
     'mediapipe',
+    'cv2',
     'scipy',
     'scipy.spatial',
 ] + mp_hidden
@@ -50,7 +53,7 @@ a = Analysis(
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
-    excludes=['tkinter', 'matplotlib'],
+    excludes=['tkinter', 'torch', 'torchvision', 'torchaudio', 'librosa', 'IPython'],
     win_no_prefer_redirects=False,
     win_private_assemblies=False,
     cipher=block_cipher,
@@ -69,7 +72,7 @@ exe = EXE(
     bootloader_ignore_signals=False,
     strip=False,
     upx=True,
-    console=False,
+    console=True,
     disable_windowed_traceback=False,
     argv_emulation=False,
     target_arch=None,

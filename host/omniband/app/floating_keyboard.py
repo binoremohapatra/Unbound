@@ -13,6 +13,7 @@ Includes:
 from __future__ import annotations
 
 import ctypes
+from ctypes import wintypes
 import os
 import subprocess
 import sys
@@ -148,6 +149,14 @@ class FloatingKeyboardWindow(QWidget):
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOPMOST)
         except Exception:
             pass
+
+    def nativeEvent(self, event_type, message):  # noqa: N802
+        if sys.platform == "win32" and event_type == b"windows_generic_MSG":
+            msg = wintypes.MSG.from_address(int(message))
+            if msg.message == 0x0021:  # WM_MOUSEACTIVATE
+                # Return MA_NOACTIVATE (3) so clicking never steals focus from target app
+                return True, 3
+        return super().nativeEvent(event_type, message)
 
     def _on_drag_clicked(self) -> None:
         if self.on_toggle_drag_fn:

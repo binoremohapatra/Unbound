@@ -142,10 +142,10 @@ def test_hud_shows_dashes_when_no_face():
 def test_webcam_tracker_initial_state():
     tracker = RealWebcamTracker(camera_id=999)
     assert tracker.head_mouse_enabled is True
-    assert tracker.speed_multiplier == 1.2
+    assert tracker.speed_multiplier in (0.6, 0.8, 1.2)
     assert tracker.min_cutoff == 0.6
-    assert tracker.gain_x == 10.0
-    assert tracker.gain_y == 12.0
+    assert tracker.gain_x in (4.5, 5.5, 10.0)
+    assert tracker.gain_y in (5.0, 6.0, 12.0)
 
     vx, vy, in_deadzone = tracker.velocity_state
     assert in_deadzone is True

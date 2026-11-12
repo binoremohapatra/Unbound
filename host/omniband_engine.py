@@ -29,9 +29,9 @@ K = CONSTANTS
 
 
 def _build_sink(args):
-    if args.dry_run or args.simulate:
+    if args.dry_run:
         return DryRunSink()
-    # real path: reuse the existing unbound Gateway + SendInput backend
+    # Real path: ALWAYS use the real unbound Gateway + SendInputBackend for real OS hardware injection
     try:
         from gateway import Gateway, SendInputBackend, RecordingBackend
         backend = RecordingBackend() if args.record else SendInputBackend()

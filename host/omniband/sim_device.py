@@ -96,7 +96,7 @@ class SimDevice:
         if t % (1000 // K["timing"]["tele_hz"]) < dt_ms:
             self._emit_tele()
         if self.auto_gestures:
-            self._maybe_auto_gesture(t)
+            pass  # Autonomous timer disabled in interactive/GUI mode; use inject_edge or physical keys
         # flush queued replies
         while self._pend_acks:
             cid, ok, err = self._pend_acks.pop(0)

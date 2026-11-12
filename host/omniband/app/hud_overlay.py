@@ -72,6 +72,17 @@ class HudOverlay(QWidget):
         self._lbl_veto.setStyleSheet(f"color: {WARM_GRAPHITE};")
         layout.addWidget(self._lbl_veto)
 
+        # Real Injection Proof Bar
+        self._lbl_target = QLabel("TARGET: ALL WINDOWS (DESKTOP MODE)")
+        self._lbl_target.setFont(QFont("Cascadia Code", 8, QFont.Bold))
+        self._lbl_target.setStyleSheet(f"color: {STATUS_OK};")
+        layout.addWidget(self._lbl_target)
+
+        self._lbl_held_keys = QLabel("LIVE OS KEYS: []")
+        self._lbl_held_keys.setFont(QFont("Cascadia Code", 8, QFont.Bold))
+        self._lbl_held_keys.setStyleSheet(f"color: {BURNT_ORANGE};")
+        layout.addWidget(self._lbl_held_keys)
+
         # 4 Mini Piezo Bars
         bars_row = QHBoxLayout()
         self._bars = []
@@ -113,11 +124,15 @@ class HudOverlay(QWidget):
         except Exception:
             pass
 
-    def update_telemetry(self, tier_name: str, mode_name: str, assist_name: str, veto_text: str, bar_vals: list[float]) -> None:
+    def update_telemetry(self, tier_name: str, mode_name: str, assist_name: str, veto_text: str, bar_vals: list[float], target_win: str = "", held_keys: list[str] | None = None) -> None:
         self._lbl_tier.setText(tier_name)
         self._lbl_mode.setText(mode_name)
         self._lbl_assist.setText(f"CO-PILOT: {assist_name}")
         self._lbl_veto.setText(veto_text)
+        if target_win:
+            self._lbl_target.setText(f"TARGET: {target_win[:28]}")
+        if held_keys is not None:
+            self._lbl_held_keys.setText(f"LIVE OS KEYS: [{', '.join(held_keys)}]")
         for i, val in enumerate(bar_vals[:4]):
             self._bars[i].setValue(int(val * 100))
 

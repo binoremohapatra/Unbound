@@ -15,13 +15,14 @@ Features:
 from __future__ import annotations
 
 import sys
+import time
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QTabWidget,
     QLabel, QPushButton, QComboBox, QStatusBar, QMessageBox, QApplication,
-    QSystemTrayIcon
+    QSystemTrayIcon, QCheckBox
 )
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QIcon, QFont, QCloseEvent
+from PySide6.QtGui import QIcon, QFont, QCloseEvent, QImage, QPixmap
 
 from host.omniband.app.theme import (
     apply_theme, BURNT_ORANGE, STATUS_OK, STATUS_WARN,
@@ -33,7 +34,9 @@ from host.omniband.app.icu_view import IcuView
 from host.omniband.app.calibration_view import CalibrationView
 from host.omniband.app.hud_overlay import HudOverlay
 from host.omniband.app.tray_agent import SystemTrayAgent
-from host.omniband.app.auto_profile import AutoProfileWatcher, ProfileRule
+from host.omniband.app.auto_profile import AutoProfileWatcher, ProfileRule, get_active_process_win32
+from host.omniband.tracking.webcam_tracker import RealWebcamTracker
+from host.omniband.tracking.physical_keys import PhysicalKeyPoller
 
 
 class MainWindow(QMainWindow):
@@ -90,6 +93,10 @@ class MainWindow(QMainWindow):
         self._chk_lock_mode.setCheckable(True)
         self._chk_lock_mode.toggled.connect(self._on_lock_mode_toggled)
 
+        self._chk_allow_all = QCheckBox("Allow All Windows (Desktop Test Mode)")
+        self._chk_allow_all.setChecked(True)
+        self._chk_allow_all.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold;")
+
         btn_release = QPushButton("⚠️ RELEASE ALL")
         btn_release.setObjectName("danger_btn")
         btn_release.clicked.connect(self._emergency_release_all)
@@ -97,12 +104,33 @@ class MainWindow(QMainWindow):
         top_bar.addWidget(lbl_mode)
         top_bar.addWidget(self._combo_mode)
         top_bar.addWidget(self._chk_lock_mode)
+        top_bar.addWidget(self._chk_allow_all)
         top_bar.addSpacing(16)
         top_bar.addWidget(self._lbl_tier)
         top_bar.addStretch()
         top_bar.addWidget(btn_toggle_hud)
         top_bar.addWidget(btn_release)
         root_layout.addLayout(top_bar)
+
+        # Real Injection Proof Bar
+        proof_bar = QHBoxLayout()
+        self._lbl_proof_target = QLabel("TARGET: ALL WINDOWS (DESKTOP MODE)")
+        self._lbl_proof_target.setFont(QFont("Cascadia Code", 9, QFont.Bold))
+        self._lbl_proof_target.setStyleSheet(f"color: {STATUS_OK}; background: {SURFACE_1}; padding: 4px 8px; border-radius: 4px;")
+
+        self._lbl_proof_keys = QLabel("LIVE OS KEYS HELD: []")
+        self._lbl_proof_keys.setFont(QFont("Cascadia Code", 9, QFont.Bold))
+        self._lbl_proof_keys.setStyleSheet(f"color: {BURNT_ORANGE}; background: {SURFACE_1}; padding: 4px 8px; border-radius: 4px;")
+
+        self._lbl_proof_last = QLabel("LAST INJECTION: READY")
+        self._lbl_proof_last.setFont(QFont("Cascadia Code", 9))
+        self._lbl_proof_last.setStyleSheet(f"color: {WARM_GRAPHITE}; background: {SURFACE_1}; padding: 4px 8px; border-radius: 4px;")
+
+        proof_bar.addWidget(self._lbl_proof_target)
+        proof_bar.addWidget(self._lbl_proof_keys)
+        proof_bar.addWidget(self._lbl_proof_last)
+        proof_bar.addStretch()
+        root_layout.addLayout(proof_bar)
 
         # Main Tabs
         self.tabs = QTabWidget()
@@ -111,7 +139,17 @@ class MainWindow(QMainWindow):
         self.icu = IcuView()
         self.calib = CalibrationView()
 
+        # Camera Preview Tab
+        self.camera_tab = QWidget()
+        cam_layout = QVBoxLayout(self.camera_tab)
+        self.camera_lbl = QLabel("Initializing Real Webcam (cv2)...")
+        self.camera_lbl.setAlignment(Qt.AlignCenter)
+        self.camera_lbl.setMinimumSize(480, 360)
+        self.camera_lbl.setStyleSheet(f"background: #111; border: 2px solid {BURNT_ORANGE}; border-radius: 6px;")
+        cam_layout.addWidget(self.camera_lbl)
+
         self.tabs.addTab(self.scope, "Oscilloscope (Signal)")
+        self.tabs.addTab(self.camera_tab, "Live Webcam (Face & Jaw)")
         self.tabs.addTab(self.arena, "Cyber-Arena (Native 60 FPS)")
         self.tabs.addTab(self.icu, "ICU Patient Board")
         self.tabs.addTab(self.calib, "Calibration & Diagnostics")
@@ -141,12 +179,110 @@ class MainWindow(QMainWindow):
         self.status.showMessage("OmniBand somatic link active | 60 Hz host engine loop online")
         self.setStatusBar(self.status)
 
+        # Gateway Real Win32 SendInput Instance
+        from gateway import Gateway, SendInputBackend
+        self.gw = Gateway(SendInputBackend())
+        self.gw.install_exit_handlers()
+
+        # Real Optical Webcam Tracker
+        self.webcam_tracker = RealWebcamTracker(
+            camera_id=0,
+            on_envelopes=self._on_optical_envelopes,
+            on_frame=self._on_webcam_frame,
+        )
+        self.webcam_tracker.start()
+
+        # Physical Key Poller (F7-F10)
+        self.key_poller = PhysicalKeyPoller(
+            on_edge=self._on_physical_edge,
+            on_envelopes=self._on_key_envelopes,
+        )
+        self.key_poller.start()
+
+        # Target & OS Keys Live Refresher Timer (10 Hz)
+        self._proof_timer = QTimer(self)
+        self._proof_timer.setInterval(100)
+        self._proof_timer.timeout.connect(self._refresh_proof_bar)
+        self._proof_timer.start()
+
         # Background 4 Hz Auto-Profile Watcher
         self.watcher = AutoProfileWatcher(
             on_rule_applied=self._on_auto_rule_applied,
             on_release_all=self._emergency_release_all,
         )
         self.watcher.start()
+
+    def _on_webcam_frame(self, frame_rgb) -> None:
+        try:
+            h, w, ch = frame_rgb.shape
+            bytes_per_line = ch * w
+            qimg = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
+            pix = QPixmap.fromImage(qimg).scaled(480, 360, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            self.camera_lbl.setPixmap(pix)
+        except Exception:
+            pass
+
+    def _on_optical_envelopes(self, vals: list[float], active: list[bool]) -> None:
+        self.scope.push_sample(vals, active)
+
+    def _on_key_envelopes(self, vals: list[float], active: list[bool]) -> None:
+        self.scope.push_sample(vals, active)
+
+    def _on_physical_edge(self, ch: int, down: bool, amp: float) -> None:
+        from core.events import OutputCommand
+        cmds = []
+        now_str = time.strftime("%H:%M:%S")
+
+        # Check target gating
+        if not self._chk_allow_all.isChecked():
+            proc = get_active_process_win32()
+            exe_lower = proc.exe_name.lower()
+            allowed = ["cyberpunk2077.exe", "notepad.exe", "unbound.exe"]
+            if not any(a in exe_lower for a in allowed):
+                return
+
+        # F7 -> CH1 (A / Steer L)
+        if ch == 1:
+            cmds.append(OutputCommand(kind="key", name="a", pressed=down))
+            self._lbl_proof_last.setText(f"LAST: F7 -> Key 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
+        # F8 -> CH2 (D / Steer R)
+        elif ch == 2:
+            cmds.append(OutputCommand(kind="key", name="d", pressed=down))
+            self._lbl_proof_last.setText(f"LAST: F8 -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
+        # F9 -> CH3 (W / Throttle)
+        elif ch == 3:
+            cmds.append(OutputCommand(kind="key", name="w", pressed=down))
+            self._lbl_proof_last.setText(f"LAST: F9 -> Key 'w' ({'DOWN' if down else 'UP'}) @ {now_str}")
+        # F10 -> CH4 (Left Click / Space)
+        elif ch == 4:
+            cmds.append(OutputCommand(kind="button", name="left", pressed=down))
+            self._lbl_proof_last.setText(f"LAST: F10 -> Mouse Left ({'DOWN' if down else 'UP'}) @ {now_str}")
+
+        if cmds:
+            self.gw.apply(cmds)
+            self.gw.flush(time.perf_counter())
+
+    def _refresh_proof_bar(self) -> None:
+        proc = get_active_process_win32()
+        target_name = proc.exe_name or "Windows Desktop"
+        if proc.window_title:
+            target_name += f" ({proc.window_title[:24]})"
+        self._lbl_proof_target.setText(f"TARGET: {target_name}")
+
+        held = sorted(list(self.gw.held))
+        held_str = ", ".join(held) if held else "NONE"
+        self._lbl_proof_keys.setText(f"LIVE OS KEYS HELD: [{held_str}]")
+
+        # Update HUD Overlay Proof Bar
+        self.hud.update_telemetry(
+            tier_name=self._lbl_tier.text(),
+            mode_name=self._combo_mode.currentText()[:16],
+            assist_name="ACTIVE",
+            veto_text="STATUS: INJECTING REAL KEYS",
+            bar_vals=[0.2, 0.4, 0.3, 0.5],
+            target_win=target_name,
+            held_keys=held,
+        )
 
     def _on_auto_rule_applied(self, rule: ProfileRule) -> None:
         self.calib.append_log(f"Auto-Hook: {rule.name} (Switching to Mode {rule.mode})")

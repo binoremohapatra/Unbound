@@ -1,14 +1,17 @@
-"""webcam_tracker.py — Real Face Tracking: MediaPipe FaceLandmarker + OpenCV cascade backup.
+"""webcam_tracker.py — Real Face Tracking: MediaPipe FaceLandmarker (primary + only detector).
 
 NO fake geometric fallbacks. NO hardcoded EAR/MAR values.
 When no real face is detected the HUD says: EAR: -- | MAR: -- | ⚠ ALIGN FULL FACE IN FRAME
 
-Tracking pipeline (priority order):
-  1. MediaPipe Tasks FaceLandmarker (face_landmarker.task) — 478 3D landmarks + blendshapes
-  2. OpenCV Haar cascade: face+eye validated ROI (rejects headphones/hair/objects with no eyes)
-  3. No face → show alignment guide, freeze cursor at zero velocity
+cv2 5.0.0 removed CascadeClassifier — OpenCV Haar cascade is NOT available.
+Only MediaPipe Tasks FaceLandmarker (face_landmarker.task) is used for detection.
 
-Head-Mouse: eye-centre → anatomical nose anchor → 1-Euro filtered relative delta → ballistic velocity.
+Tracking pipeline:
+  1. MediaPipe Tasks FaceLandmarker — 478 3D landmarks + blendshapes, confidence=0.1
+  2. No face → show alignment guide, freeze cursor at zero velocity
+
+Camera: CAP_DSHOW on Windows to avoid MSMF exclusive-access conflicts.
+Head-Mouse: rigid nose-bridge anchor → 1-Euro filtered relative delta → ballistic velocity.
 """
 from __future__ import annotations
 
@@ -48,13 +51,18 @@ except Exception:
 def find_model_path() -> Optional[str]:
     """Locate face_landmarker.task in source tree or PyInstaller bundle."""
     candidates = [
+        # Frozen PyInstaller directory or _internal directory
+        Path(sys.executable).parent / "face_landmarker.task" if getattr(sys, "frozen", False) else None,
+        Path(sys.executable).parent / "_internal" / "face_landmarker.task" if getattr(sys, "frozen", False) else None,
+        Path(getattr(sys, "_MEIPASS", ".")).resolve() / "face_landmarker.task",
+        Path(getattr(sys, "_MEIPASS", ".")).resolve() / "_internal" / "face_landmarker.task",
+        # Source tree paths
         Path(__file__).resolve().parent.parent.parent / "face_landmarker.task",
         Path(__file__).resolve().parent / "face_landmarker.task",
         Path("face_landmarker.task"),
-        Path(getattr(sys, "_MEIPASS", ".")) / "face_landmarker.task",
     ]
     for c in candidates:
-        if c.is_file():
+        if c is not None and c.is_file():
             return str(c)
     return None
 
@@ -365,7 +373,12 @@ class RealWebcamTracker:
     # Capture loop
     # ------------------------------------------------------------------
     def _capture_loop(self) -> None:
-        cap = cv2.VideoCapture(self.camera_id)
+        # CAP_DSHOW on Windows avoids MSMF exclusive-access conflicts (error -1072875772)
+        backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
+        cap = cv2.VideoCapture(self.camera_id, backend)
+        if not cap.isOpened():
+            # Fallback: try default backend
+            cap = cv2.VideoCapture(self.camera_id)
         if not cap.isOpened():
             log.warning("Could not open webcam index %d", self.camera_id)
             self._running = False
@@ -374,8 +387,9 @@ class RealWebcamTracker:
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
 
-        # Warm up sensor exposure
-        for _ in range(8):
+        # Warm up sensor exposure + allow DSHOW to initialise
+        time.sleep(0.3)
+        for _ in range(10):
             cap.read()
 
         # Try MediaPipe FaceLandmarker first
@@ -388,8 +402,8 @@ class RealWebcamTracker:
                     base_options=base_options,
                     output_face_blendshapes=True,
                     num_faces=1,
-                    min_face_detection_confidence=0.4,
-                    min_face_presence_confidence=0.4,
+                    min_face_detection_confidence=0.1,   # very permissive — works in all lighting
+                    min_face_presence_confidence=0.1,
                 )
                 detector = vision.FaceLandmarker.create_from_options(options)
                 log.info("MediaPipe FaceLandmarker loaded from %s", model_path)

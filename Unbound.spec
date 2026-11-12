@@ -1,13 +1,15 @@
 # -*- mode: python ; coding: utf-8 -*-
-from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+from PyInstaller.utils.hooks import collect_data_files, collect_submodules, collect_all
 
 block_cipher = None
+
+mp_datas, mp_binaries, mp_hidden = collect_all('mediapipe')
 
 datas = [
     ('host/profiles/*.json', 'host/profiles'),
     ('protocol/constants.json', 'protocol'),
     ('face_landmarker.task', '.'),
-]
+] + mp_datas
 
 hiddenimports = [
     'PySide6.QtCore',
@@ -32,12 +34,17 @@ hiddenimports = [
     'host.omniband.copilot.sim.vehicle',
     'host.omniband.copilot.sim.track',
     'host.omniband.adapters.telemetry.native_arena',
-]
+    'mediapipe',
+    'scipy',
+    'scipy.spatial',
+] + mp_hidden
+
+binaries = mp_binaries
 
 a = Analysis(
     ['host/omniband_engine.py'],
     pathex=['.'],
-    binaries=[],
+    binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
     hookspath=[],

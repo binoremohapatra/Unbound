@@ -294,9 +294,11 @@ class CursorTracker:
         self._calib_samples: list[Tuple[float, float]] = []
         self._calib_target_samples = 20
 
-        # One-Euro filters with aggressive standstill smoothing (min_cutoff=0.15)
-        self.filter_yaw = OneEuroFilter(freq=60.0, min_cutoff=0.15, beta=0.006)
-        self.filter_pitch = OneEuroFilter(freq=60.0, min_cutoff=0.15, beta=0.006)
+        # One-Euro filters — ultra-low min_cutoff aggressively kills standstill noise.
+        # beta controls speed-dependent cutoff: low beta = smoother tracking at cost of lag.
+        # min_cutoff=0.05 → near-zero noise when head is still; beta=0.003 → smooth motion.
+        self.filter_yaw = OneEuroFilter(freq=60.0, min_cutoff=0.05, beta=0.003)
+        self.filter_pitch = OneEuroFilter(freq=60.0, min_cutoff=0.05, beta=0.003)
 
         # Dwell clicker integration
         self.dwell_clicker: Optional[DwellClicker] = (
@@ -399,23 +401,23 @@ class CursorTracker:
 
         # Velocity-weighted adaptive screen-space dampening & tremor elimination
         dist = math.hypot(target_x - prev_x, target_y - prev_y)
-        if dist < 2.5:
-            # Stiff / stationary head: freeze micro-tremor completely
+        if dist < 4.0:
+            # Stiff / stationary head: freeze micro-tremor completely (wider dead-band)
             new_x = prev_x
             new_y = prev_y
-        elif dist < 20.0:
-            # Fine aiming: heavy low-pass dampening for razor-sharp precision
-            alpha = 0.18
+        elif dist < 15.0:
+            # Fine aiming: very heavy low-pass for razor-sharp precision targeting
+            alpha = 0.12
             new_x = prev_x + (target_x - prev_x) * alpha
             new_y = prev_y + (target_y - prev_y) * alpha
         elif dist < 80.0:
             # Normal movement: silky smooth progressive transition
-            alpha = 0.40
+            alpha = 0.35
             new_x = prev_x + (target_x - prev_x) * alpha
             new_y = prev_y + (target_y - prev_y) * alpha
         else:
             # Fast flick: responsive tracking without perceptible lag
-            alpha = 0.70
+            alpha = 0.65
             new_x = prev_x + (target_x - prev_x) * alpha
             new_y = prev_y + (target_y - prev_y) * alpha
 

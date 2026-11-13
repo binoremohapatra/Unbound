@@ -3,13 +3,13 @@
 Monitors active Windows UI focus for text input fields (WhatsApp, Chrome, Edge,
 Notepad, VS Code, search boxes) by checking:
 1. Cursor shape == IDC_IBEAM (0x00010007 / 32513) via GetCursorInfo & GetIconInfo
-2. Active window process names (WhatsApp.exe, chrome.exe, msedge.exe, Code.exe, notepad.exe)
+2. Active window process names (WhatsApp.exe, ApplicationFrameHost.exe, chrome.exe, msedge.exe, Code.exe, notepad.exe)
 3. Win32 GUI Thread info (GetGUIThreadInfo flags & GUI_CARETBLINKING 0x00000001)
-4. Left mouse click detection (physical mouse & biometric head-mouse) to re-trigger auto-popup
+4. Left mouse click detection (physical mouse & biometric head-mouse) with 80ms delayed evaluation
 
 Features:
-- NO Startup Popup: Suppresses auto-popup during startup (2.5s grace period)
-- Reliable Re-Trigger: Clicking inside any text box resets the dismissal latch
+- NO Startup Popup: Strict 3.0s startup grace period (time.monotonic) so initial window focus NEVER pops up
+- Reliable Re-Trigger: Clicking inside any text box or chat app client area resets the dismissal latch
 - Electron & Chromium App Support: 100% reliable detection for WhatsApp Desktop and Chrome
 """
 from __future__ import annotations
@@ -29,6 +29,7 @@ IDC_IBEAM_INT = 32513
 
 TARGET_TEXT_APPS = {
     "whatsapp.exe",
+    "applicationframehost.exe",  # UWP WhatsApp container on Windows 10/11
     "chrome.exe",
     "msedge.exe",
     "code.exe",
@@ -119,8 +120,8 @@ class TextFocusWatcher:
         self._ibeam_handle = 0
         self._ibeam_handles: Set[int] = set()
 
-        # Startup suppression: NO popup on app launch
-        self._startup_suppress_until = time.time() + 2.5
+        # Strict startup grace period using time.monotonic(): NO popup on app launch!
+        self._startup_suppress_until = time.monotonic() + 3.0
         self._user_dismissed = True  # Starts dismissed so startup NEVER pops up
         self._last_hwnd_fg = 0
         self._dismissed_hwnd = 0
@@ -160,8 +161,13 @@ class TextFocusWatcher:
             self._is_text_focused = False
 
     def notify_click(self, x: int = -1, y: int = -1) -> None:
-        """Called on biometric or external click to evaluate text field click."""
-        self._evaluate_click(x, y)
+        """Called on biometric, somatic, or physical click to evaluate text field click after 80ms."""
+        threading.Thread(
+            target=self._delayed_click_check,
+            args=(x, y),
+            daemon=True,
+            name="DelayedTextClickCheck",
+        ).start()
 
     def simulate_focus(self, focused: bool) -> None:
         """Used by tests to simulate text focus transitions."""
@@ -181,7 +187,7 @@ class TextFocusWatcher:
         if self._running or os.name != "nt":
             return False
         self._running = True
-        self._startup_suppress_until = time.time() + 2.5
+        self._startup_suppress_until = time.monotonic() + 3.0
         self._user_dismissed = True
         self._thread = threading.Thread(
             target=self._worker_loop,
@@ -233,44 +239,74 @@ class TextFocusWatcher:
             self._cached_proc_names = {h: v for h, v in self._cached_proc_names.items() if now - v[0] < 5.0}
         return name
 
-    def _evaluate_click(self, x: int = -1, y: int = -1) -> None:
-        """Reset dismissal latch if click occurred on a text input field."""
-        if os.name != "nt":
+    def _delayed_click_check(self, click_x: int, click_y: int) -> None:
+        """Evaluates focus 80ms after a click so target app processes focus."""
+        time.sleep(0.080)
+        if os.name != "nt" or not self._running:
             return
         try:
             user32 = ctypes.windll.user32
             hwnd_fg = user32.GetForegroundWindow()
-            proc_fg = self._get_process_name_cached(hwnd_fg)
+            if not hwnd_fg:
+                return
 
+            # Check if desktop or taskbar was clicked -> dismiss keyboard
+            cls_buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd_fg, cls_buf, 256)
+            cls_name = cls_buf.value
+            if cls_name in ("Shell_TrayWnd", "Progman", "WorkerW"):
+                self.dismiss()
+                if self.on_text_focus_changed:
+                    self.on_text_focus_changed(False)
+                return
+
+            proc_fg = self._get_process_name_cached(hwnd_fg)
+            if not proc_fg or proc_fg == "unbound.exe":
+                return
+
+            # 1. Cursor shape check (IDC_IBEAM)
             ci = CURSORINFO()
             ci.cbSize = ctypes.sizeof(CURSORINFO)
             is_ibeam = False
-            hwnd_under = 0
-            proc_under = ""
+            pt_x, pt_y = click_x, click_y
             if user32.GetCursorInfo(ctypes.byref(ci)):
                 is_ibeam = self._is_cursor_ibeam(ci.hCursor)
-                hwnd_under = user32.WindowFromPoint(ci.ptScreenPos)
-                if hwnd_under:
-                    proc_under = self._get_process_name_cached(hwnd_under)
+                if pt_x == -1 or pt_y == -1:
+                    pt_x, pt_y = ci.ptScreenPos.x, ci.ptScreenPos.y
 
-            is_target_app = (proc_fg in TARGET_TEXT_APPS) or (proc_under in TARGET_TEXT_APPS)
-
+            # 2. Caret check via GetGUIThreadInfo
             has_caret = False
-            if hwnd_fg:
-                pid = wintypes.DWORD(0)
-                tid = user32.GetWindowThreadProcessId(hwnd_fg, ctypes.byref(pid))
-                if tid and pid.value != os.getpid():
-                    gti = GUITHREADINFO()
-                    gti.cbSize = ctypes.sizeof(GUITHREADINFO)
-                    if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
-                        if (gti.flags & GUI_CARETBLINKING) or (gti.hwndCaret != 0):
-                            has_caret = True
+            pid = wintypes.DWORD(0)
+            tid = user32.GetWindowThreadProcessId(hwnd_fg, ctypes.byref(pid))
+            if tid and pid.value != os.getpid():
+                gti = GUITHREADINFO()
+                gti.cbSize = ctypes.sizeof(GUITHREADINFO)
+                if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
+                    if (gti.flags & GUI_CARETBLINKING) or (gti.hwndCaret != 0):
+                        has_caret = True
 
-            if is_ibeam or has_caret or is_target_app:
+            # 3. Target App (WhatsApp, Chrome, Notepad, etc.) check
+            is_target_app = proc_fg in TARGET_TEXT_APPS
+            title_buf = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd_fg, title_buf, 512)
+            win_title = title_buf.value.lower()
+            if "whatsapp" in win_title or "chat" in win_title:
+                is_target_app = True
+
+            # 4. Client area check (bottom 85% of window, not titlebar/tabs)
+            in_client_area = True
+            rc = wintypes.RECT()
+            if user32.GetWindowRect(hwnd_fg, ctypes.byref(rc)):
+                win_h = rc.bottom - rc.top
+                if win_h > 60 and pt_y != -1:
+                    in_client_area = pt_y >= (rc.top + int(win_h * 0.15))
+
+            should_popup = is_ibeam or has_caret or (is_target_app and in_client_area)
+            if should_popup:
                 with self._lock:
                     self._user_dismissed = False
-                    self._is_text_focused = False
-                if (is_ibeam or has_caret) and self.on_text_focus_changed:
+                    self._is_text_focused = True
+                if self.on_text_focus_changed:
                     try:
                         self.on_text_focus_changed(True)
                     except Exception:
@@ -284,7 +320,7 @@ class TextFocusWatcher:
 
         while self._running:
             focused = False
-            now = time.time()
+            now = time.monotonic()
             in_startup = now < self._startup_suppress_until
 
             try:
@@ -299,9 +335,16 @@ class TextFocusWatcher:
 
                 proc_fg = self._get_process_name_cached(hwnd_fg) if hwnd_fg else ""
 
+                # Check if desktop or taskbar has focus -> auto-dismiss
+                if hwnd_fg:
+                    cls_buf = ctypes.create_unicode_buffer(256)
+                    user32.GetClassNameW(hwnd_fg, cls_buf, 256)
+                    if cls_buf.value in ("Shell_TrayWnd", "Progman", "WorkerW"):
+                        focused = False
+
                 # 1. Check active caret blinking via GetGUIThreadInfo
                 has_gui_caret = False
-                if hwnd_fg:
+                if hwnd_fg and proc_fg != "unbound.exe":
                     pid = wintypes.DWORD(0)
                     tid = user32.GetWindowThreadProcessId(hwnd_fg, ctypes.byref(pid))
                     if tid and pid.value != os.getpid():
@@ -334,12 +377,7 @@ class TextFocusWatcher:
                 # 3. Detect physical mouse click (VK_LBUTTON edge down)
                 lbutton_down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)
                 if lbutton_down and not self._prev_lbutton_down:
-                    if is_ibeam or has_gui_caret or (proc_fg in TARGET_TEXT_APPS):
-                        with self._lock:
-                            self._user_dismissed = False
-                            self._is_text_focused = False
-                        if is_ibeam or has_gui_caret:
-                            focused = True
+                    self.notify_click()
                 self._prev_lbutton_down = lbutton_down
 
                 # 4. If focus was cleared (user clicked away to non-text), reset dismissal

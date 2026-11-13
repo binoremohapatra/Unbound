@@ -382,6 +382,7 @@ class RealWebcamTracker:
         on_scroll_clutch: Optional[Callable[[bool, float], None]] = None,
         on_zoom_clutch: Optional[Callable[[bool, float, float], None]] = None,
         on_latch_changed: Optional[Callable[[str], None]] = None,
+        on_universal_exit: Optional[Callable[[], None]] = None,
         optical_calibrator: Optional[OpticalCalibrator] = None,
     ) -> None:
         self.camera_id = camera_id
@@ -393,6 +394,7 @@ class RealWebcamTracker:
         self.on_scroll_clutch = on_scroll_clutch
         self.on_zoom_clutch = on_zoom_clutch
         self.on_latch_changed = on_latch_changed
+        self.on_universal_exit = on_universal_exit
         self.calibrator = optical_calibrator or OpticalCalibrator()
 
         self._running = False
@@ -465,6 +467,11 @@ class RealWebcamTracker:
         self._last_gesture_banner: str = ""
         self._gesture_banner_expire: float = 0.0
 
+        # Universal Triple-Blink Exit tracking & Look-Away guard
+        self._blink_timestamps: list[float] = []
+        self._bilateral_blink_start: float = 0.0
+        self.is_looking_away: bool = False
+
         # Channel states
         self._ch1_active: bool = False
         self._ch2_active: bool = False
@@ -515,6 +522,26 @@ class RealWebcamTracker:
 
     def trigger_blink_freeze(self, duration_s: float = 0.35) -> None:
         self._freeze_until = time.perf_counter() + duration_s
+
+    def unlock_all_to_idle(self) -> None:
+        """Universal Escape: resets any active latch (SCROLL_LOCKED, ZOOM_LOCKED) back to IDLE immediately."""
+        self.active_latch = "IDLE"
+        self._left_wink_start = 0.0
+        self._right_wink_start = 0.0
+        self._blink_timestamps.clear()
+        self._last_gesture_banner = "✅ UNLOCKED — FREE CURSOR"
+        self._gesture_banner_expire = time.time() + 1.5
+        if self.on_latch_changed:
+            self.on_latch_changed("IDLE")
+        if self.on_scroll_clutch:
+            self.on_scroll_clutch(False, 0.0)
+        if self.on_zoom_clutch:
+            self.on_zoom_clutch(False, 0.0, 1.0)
+        if self.on_universal_exit:
+            try:
+                self.on_universal_exit()
+            except Exception:
+                pass
 
     def recenter(self) -> None:
         """Reset neutral resting centre to current head position."""
@@ -906,14 +933,41 @@ class RealWebcamTracker:
                 base_speed = self.speed_multiplier * (excess ** 1.35) * 1600.0
                 vx = ux * base_speed * self.gain_x
                 vy = uy * base_speed * self.gain_y
-                if excess < 0.025:
+
+                # Precision Micro-Braking Near Targets (Anti-Jitter for Small Buttons):
+                # When head velocity drops below 0.004 / frame, dynamically increase damping (min_cutoff = 0.35)
+                if excess < 0.004:
+                    self.filter_dx.min_cutoff = 0.35
+                    self.filter_dy.min_cutoff = 0.35
+                    vx *= 0.20
+                    vy *= 0.20
+                elif excess < 0.025:
+                    self.filter_dx.min_cutoff = self.min_cutoff
+                    self.filter_dy.min_cutoff = self.min_cutoff
                     vx *= 0.35
                     vy *= 0.35
+                else:
+                    self.filter_dx.min_cutoff = self.min_cutoff
+                    self.filter_dy.min_cutoff = self.min_cutoff
         else:
             self.filter_dx.reset(now, 0.0)
             self.filter_dy.reset(now, 0.0)
 
-        if now < self._freeze_until or self.active_latch != "IDLE":
+        # Look-Away Auto-Pause Guard (Neck Fatigue & Conversation Guard)
+        # If user turns head sharply away (|yaw| > 22.0 or |nose_x - 0.5| > 0.38 or face leaves frame)
+        is_look_away = False
+        if not res.face_found or res.nose_tip is None:
+            is_look_away = True
+        elif abs(res.yaw) > 22.0 or abs(res.nose_tip[0] - 0.5) > 0.38:
+            is_look_away = True
+
+        self.is_looking_away = is_look_away
+        if is_look_away:
+            vx = 0.0
+            vy = 0.0
+            self._last_gesture_banner = "⏸️ PAUSED (LOOKING AWAY)"
+            self._gesture_banner_expire = now + 0.4
+        elif now < self._freeze_until or self.active_latch != "IDLE":
             vx = 0.0
             vy = 0.0
 
@@ -965,6 +1019,25 @@ class RealWebcamTracker:
         # Bilateral Blink: both eyes closing simultaneously
         is_bilateral_blink = (left_ear < l_wink_thresh) and (right_ear < r_wink_thresh)
 
+        # Track bilateral blink duration (70 ms - 350 ms) & rolling timestamps for Triple-Blink Universal Exit
+        if is_bilateral_blink:
+            if self._bilateral_blink_start == 0.0:
+                self._bilateral_blink_start = now
+        else:
+            if self._bilateral_blink_start > 0.0:
+                dur = now - self._bilateral_blink_start
+                self._bilateral_blink_start = 0.0
+                if 0.06 <= dur <= 0.40:
+                    self._blink_timestamps.append(now)
+                    self._blink_timestamps = [t for t in self._blink_timestamps if now - t <= 1.20]
+                    # Check Universal Triple-Blink Exit (3 blinks within 1.20s)
+                    if len(self._blink_timestamps) >= 3:
+                        self._blink_timestamps.clear()
+                        self._last_blink_time = 0.0
+                        self._blink_active = False
+                        self.unlock_all_to_idle()
+                        return
+
         # Asymmetric Left Wink condition
         is_left_wink = (
             left_ear < l_wink_thresh
@@ -1013,7 +1086,7 @@ class RealWebcamTracker:
                 self._pitch_anchor_y = ny
                 self._filtered_pitch_y = ny
                 self._left_wink_start = 0.0
-                self._last_gesture_banner = "🔵 SCROLL LOCKED | Tap Right-Eye to Exit"
+                self._last_gesture_banner = "🔵 SCROLL LOCKED | 👁️x3 Triple-Blink to Exit"
                 self._gesture_banner_expire = now + 2.0
                 if self.on_latch_changed:
                     self.on_latch_changed("SCROLL_LOCKED")
@@ -1029,7 +1102,7 @@ class RealWebcamTracker:
                 self._filtered_pitch_y = ny
                 self._scale_anchor_dist = eye_dist
                 self._right_wink_start = 0.0
-                self._last_gesture_banner = "🟣 ZOOM LOCKED | Tap Left-Eye to Exit"
+                self._last_gesture_banner = "🟣 ZOOM LOCKED | 👁️x3 Triple-Blink to Exit"
                 self._gesture_banner_expire = now + 2.0
                 if self.on_latch_changed:
                     self.on_latch_changed("ZOOM_LOCKED")
@@ -1328,3 +1401,7 @@ class RealWebcamTracker:
                 (16, 24),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (247, 245, 240), 1, cv2.LINE_AA,
             )
+
+
+# Alias for backward compatibility
+WebcamTracker = RealWebcamTracker

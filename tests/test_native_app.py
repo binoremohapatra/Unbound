@@ -368,3 +368,57 @@ def test_optical_calibration_wizard_computation(tmp_path):
     assert prof.left_open_floor > prof.right_wink_thresh
     assert prof.jaw_click_thresh > 0.18
 
+
+def test_triple_blink_universal_exit_and_lookaway_guard():
+    from host.omniband.tracking.webcam_tracker import RealWebcamTracker, TrackerResult
+
+    universal_exits = []
+    tracker = RealWebcamTracker(on_universal_exit=lambda: universal_exits.append(True))
+    tracker.auto_open_ear_L = 0.28
+    tracker.auto_open_ear_R = 0.28
+    tracker._auto_calibrated = True
+
+    # 1. Enter SCROLL_LOCKED mode
+    tracker.active_latch = "SCROLL_LOCKED"
+    tracker._latch_locked_time = 100.0
+
+    # 2. Fire 3 bilateral blinks within 1.20s
+    t = 101.0
+    closed_frame = TrackerResult(
+        tier="FACEMESH478", face_found=True, nose_tip=(0.5, 0.45), ear=0.10, left_ear=0.10, right_ear=0.10,
+        mar=0.05, eye_dist=0.12, yaw=0.0, pitch=0.0, timestamp_ms=int(t * 1000), landmarks=[],
+    )
+    open_frame = TrackerResult(
+        tier="FACEMESH478", face_found=True, nose_tip=(0.5, 0.45), ear=0.28, left_ear=0.28, right_ear=0.28,
+        mar=0.05, eye_dist=0.12, yaw=0.0, pitch=0.0, timestamp_ms=int(t * 1000), landmarks=[],
+    )
+
+    # Blink 1
+    tracker._process_gestures(closed_frame, now=t)
+    tracker._process_gestures(open_frame, now=t + 0.12)
+
+    # Blink 2
+    tracker._process_gestures(closed_frame, now=t + 0.30)
+    tracker._process_gestures(open_frame, now=t + 0.42)
+
+    # Blink 3
+    tracker._process_gestures(closed_frame, now=t + 0.60)
+    tracker._process_gestures(open_frame, now=t + 0.72)
+
+    # Universal exit triggered! Returned to IDLE
+    assert tracker.active_latch == "IDLE"
+    assert len(universal_exits) == 1
+
+    # 3. Look-away auto-pause guard
+    tracker._calibrated = True
+    tracker._base_x = 0.5
+    tracker._base_y = 0.45
+    turned_away_frame = TrackerResult(
+        tier="FACEMESH478", face_found=True, nose_tip=(0.5, 0.45), ear=0.28, left_ear=0.28, right_ear=0.28,
+        mar=0.05, eye_dist=0.12, yaw=35.0, pitch=0.0, timestamp_ms=int(t * 1000), landmarks=[],
+    )
+    tracker._update_velocity(turned_away_frame, now=t + 1.0, w=640, h=480)
+    assert tracker.is_looking_away is True
+    vx, vy, _ = tracker.velocity_state
+    assert vx == 0.0 and vy == 0.0
+

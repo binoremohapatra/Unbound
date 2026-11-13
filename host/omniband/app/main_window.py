@@ -105,6 +105,7 @@ class MainWindow(QMainWindow):
         self._sprint_shift = False
         self._aim_ads = False
         self._drag_latch = False
+        self._click_timestamps: list[float] = []
 
         # Top Bar: Mode Selector, Tier Indicator, HUD Toggle
         top_bar = QHBoxLayout()
@@ -341,6 +342,7 @@ class MainWindow(QMainWindow):
             on_scroll_clutch=self._on_scroll_clutch_event,
             on_zoom_clutch=self._on_zoom_clutch_event,
             on_latch_changed=self._on_latch_state_changed,
+            on_universal_exit=self._on_universal_exit,
             optical_calibrator=self.optical_calibrator,
         )
         self.webcam_tracker.start()
@@ -481,6 +483,25 @@ class MainWindow(QMainWindow):
 
     def _on_biometric_click(self) -> None:
         """Triggered by EAR double-blink, deliberate long blink, or MAR quick jaw tap."""
+        now = time.time()
+        self._click_timestamps.append(now)
+        self._click_timestamps = [t for t in self._click_timestamps if now - t <= 1.20]
+
+        is_locked = (
+            (hasattr(self, "webcam_tracker") and self.webcam_tracker.active_latch != "IDLE")
+            or getattr(self, "_drag_latch", False)
+        )
+        # Universal Escape: 3 quick clicks/taps within 1.20s while locked
+        if len(self._click_timestamps) >= 3 and is_locked:
+            self._click_timestamps.clear()
+            self.webcam_tracker.unlock_all_to_idle()
+            self._on_universal_exit()
+            return
+
+        # Suppress normal left clicks while locked in Scroll or Zoom mode!
+        if hasattr(self, "webcam_tracker") and self.webcam_tracker.active_latch != "IDLE":
+            return
+
         if hasattr(self, "reticle"):
             self.reticle.trigger_click_flash()
         if hasattr(self, "focus_watcher") and self.focus_watcher:
@@ -636,17 +657,31 @@ class MainWindow(QMainWindow):
         """Update reticle and main HUD when latch state transitions."""
         now_str = time.strftime("%H:%M:%S")
         if new_state == "SCROLL_LOCKED":
-            self.status.showMessage("🔵 SCROLL LOCKED: Tilt head ▲/▼ to scroll | 😉 Right-Eye Wink to Exit", 5000)
+            self.status.showMessage("🔵 SCROLL LOCKED: Tilt head ▲/▼ to scroll | 👁️x3 Triple-Blink to Exit", 5000)
             self._lbl_proof_last.setText(f"MODE: SCROLL LOCKED @ {now_str}")
             self.calib.append_log("LATCH: SCROLL LOCKED engaged (Continuous 60 Hz).")
         elif new_state == "ZOOM_LOCKED":
-            self.status.showMessage("🟣 ZOOM LOCKED: Tilt head ▲/▼ to zoom | 😉 Left-Eye Wink to Exit", 5000)
+            self.status.showMessage("🟣 ZOOM LOCKED: Tilt head ▲/▼ to zoom | 👁️x3 Triple-Blink to Exit", 5000)
             self._lbl_proof_last.setText(f"MODE: ZOOM LOCKED @ {now_str}")
             self.calib.append_log("LATCH: ZOOM LOCKED engaged.")
         else:
             self.status.showMessage("🟠 HEAD-MOUSE ACTIVE (CURSOR FREE)", 2500)
             self._lbl_proof_last.setText(f"MODE: CURSOR (FREE) @ {now_str}")
             self.calib.append_log("LATCH: Unlocked back to IDLE cursor tracking.")
+
+    def _on_universal_exit(self) -> None:
+        """Universal Escape: resets Scroll/Zoom/Drag locks and returns to IDLE."""
+        self.gw.release_all("universal triple-blink escape")
+        self._drag_latch = False
+        if hasattr(self, "reticle"):
+            self.reticle.set_drag_locked(False)
+            self.reticle.set_scroll_clutch(False)
+            self.reticle.set_zoom_clutch(False)
+            self.reticle.trigger_unlock_flash()
+        if hasattr(self, "floating_kb") and self.floating_kb.isVisible():
+            self.floating_kb.dismiss()
+        self.status.showMessage("✅ UNLOCKED — FREE CURSOR (Triple-Blink Escape)", 3000)
+        self.calib.append_log("UNIVERSAL ESCAPE: Unlocked to IDLE free cursor.")
 
     def _on_zoom_clutch_event(self, active: bool, delta_pitch: float, scale_ratio: float) -> None:
         """Handle Asymmetric Right-Wink Doctor Zoom Clutch events."""

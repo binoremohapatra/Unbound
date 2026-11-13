@@ -68,7 +68,7 @@ class FloatingKeyboardWindow(QWidget):
             | Qt.WindowDoesNotAcceptFocus
         )
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.resize(920, 310)
+        self.resize(940, 340)
 
         # Position docked above the Taskbar work area
         self._dock_above_taskbar()
@@ -103,6 +103,39 @@ class FloatingKeyboardWindow(QWidget):
         top_bar.addWidget(btn_osk)
         top_bar.addWidget(btn_close)
         kb_layout.addLayout(top_bar)
+
+        # Quick Daily Action Strip: [ 📋 COPY ], [ 📌 PASTE ], [ ↩️ UNDO ], [ ⬅️ BROWSER BACK ], [ 🔄 SWITCH APP (Alt+Tab) ], [ 🎤 VOICE TYPE (Win+H) ]
+        action_strip = QHBoxLayout()
+        action_strip.setSpacing(4)
+
+        actions = [
+            ("📋 COPY", self._act_copy),
+            ("📌 PASTE", self._act_paste),
+            ("↩️ UNDO", self._act_undo),
+            ("⬅️ BROWSER BACK", self._act_back),
+            ("🔄 SWITCH APP", self._act_switch_app),
+            ("🎤 VOICE TYPE", self._act_voice_type),
+        ]
+        for label, fn in actions:
+            btn = QPushButton(label)
+            btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background: {SURFACE_1};
+                    color: {INDUSTRIAL_IVORY};
+                    border: 1px solid #555;
+                    border-radius: 4px;
+                    padding: 3px 6px;
+                }}
+                QPushButton:hover {{
+                    background: {SURFACE_3};
+                    border-color: {BURNT_ORANGE};
+                }}
+            """)
+            btn.clicked.connect(fn)
+            action_strip.addWidget(btn)
+
+        kb_layout.addLayout(action_strip)
 
         self.somatic_kb = SomaticKeyboardWidget(on_type_fn=self.on_type_fn, on_dismiss_fn=self.dismiss)
         self.somatic_kb.sig_dismiss.connect(self.dismiss)
@@ -239,4 +272,38 @@ class FloatingKeyboardWindow(QWidget):
             subprocess.Popen("osk.exe", shell=True)
         except Exception:
             pass
+
+    # Quick Daily Action Handlers (Zero focus steal via Win32 keybd_event)
+    def _send_win32_hotkey(self, *vks: int) -> None:
+        if sys.platform != "win32":
+            return
+        try:
+            import time
+            user32 = ctypes.windll.user32
+            KEYEVENTF_KEYUP = 0x0002
+            for vk in vks:
+                user32.keybd_event(vk, 0, 0, 0)
+            time.sleep(0.04)
+            for vk in reversed(vks):
+                user32.keybd_event(vk, 0, KEYEVENTF_KEYUP, 0)
+        except Exception:
+            pass
+
+    def _act_copy(self) -> None:
+        self._send_win32_hotkey(0x11, 0x43)  # Ctrl+C
+
+    def _act_paste(self) -> None:
+        self._send_win32_hotkey(0x11, 0x56)  # Ctrl+V
+
+    def _act_undo(self) -> None:
+        self._send_win32_hotkey(0x11, 0x5A)  # Ctrl+Z
+
+    def _act_back(self) -> None:
+        self._send_win32_hotkey(0x12, 0x25)  # Alt+Left
+
+    def _act_switch_app(self) -> None:
+        self._send_win32_hotkey(0x12, 0x09)  # Alt+Tab
+
+    def _act_voice_type(self) -> None:
+        self._send_win32_hotkey(0x5B, 0x48)  # Win+H
 

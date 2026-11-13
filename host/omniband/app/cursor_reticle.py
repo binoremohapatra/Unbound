@@ -80,7 +80,7 @@ class SomaticCursorReticle(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setFixedSize(260, 60)
+        self.setFixedSize(290, 60)
 
         # Apply hollow 6x6 px center hole so cursor pixel does not belong to this window
         self._update_hollow_mask()
@@ -129,6 +129,11 @@ class SomaticCursorReticle(QWidget):
         self._click_expire = time.perf_counter() + 0.20  # 200 ms flash
         self.update()
 
+    def trigger_unlock_flash(self) -> None:
+        self.state = "UNLOCKED_FLASH"
+        self._click_expire = time.perf_counter() + 0.40  # 400 ms flash
+        self.update()
+
     def set_drag_locked(self, locked: bool) -> None:
         self.state = "DRAG_LOCKED" if locked else "NORMAL"
         self.update()
@@ -171,8 +176,8 @@ class SomaticCursorReticle(QWidget):
                 self._style_check_counter = 0
                 enforce_click_through_hwnd(int(self.winId()))
 
-        # Check click expiration
-        if self.state == "CLICKED" and time.perf_counter() >= self._click_expire:
+        # Check click/unlock expiration
+        if self.state in ("CLICKED", "UNLOCKED_FLASH") and time.perf_counter() >= self._click_expire:
             self.state = "NORMAL"
 
         self.update()
@@ -187,6 +192,8 @@ class SomaticCursorReticle(QWidget):
         # State color selection
         if self.state == "CLICKED":
             color = QColor("#00E676")  # Emerald Green
+        elif self.state == "UNLOCKED_FLASH":
+            color = QColor("#FFD700")  # Bright Gold
         elif self.state == "DRAG_LOCKED":
             color = QColor("#E0303D")  # Crimson
         elif self.state == "SCROLL_CLUTCH":
@@ -227,21 +234,31 @@ class SomaticCursorReticle(QWidget):
 
         # State specific badge/icons & Latched text pills
         if self.state == "DRAG_LOCKED":
-            p.setBrush(QBrush(color))
-            p.drawRect(int(cx - 3), int(cy - 3), 6, 6)
-            p.setFont(QFont("Cascadia Code", 7, QFont.Bold))
-            p.setPen(QPen(color))
-            p.drawText(int(cx - 12), int(cy + 24), "HOLD")
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#E0303D"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#E0303D")))
+            p.drawText(badge_rect, Qt.AlignCenter, "🔴 DRAG LOCKED | Move Head\n👁️x3 Triple-Blink to Drop")
+        elif self.state == "UNLOCKED_FLASH":
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#00E676"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#00E676")))
+            p.drawText(badge_rect, Qt.AlignCenter, "✅ UNLOCKED — FREE CURSOR")
         elif self.state == "SCROLL_CLUTCH":
             # Glow Pill Badge to the right of reticle
-            badge_rect = QRectF(cx + 26, cy - 14, 200, 28)
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
             p.setBrush(QBrush(QColor(15, 23, 42, 230)))
             p.setPen(QPen(QColor("#00E5FF"), 1.5))
             p.drawRoundedRect(badge_rect, 6, 6)
 
             p.setFont(QFont("Segoe UI", 8, QFont.Bold))
             p.setPen(QPen(QColor("#00E5FF")))
-            p.drawText(badge_rect, Qt.AlignCenter, "🔵 SCROLL LOCKED | Tilt ▲/▼\n😉 Right-Wink to Exit")
+            p.drawText(badge_rect, Qt.AlignCenter, "🔵 SCROLL LOCKED | Tilt ▲/▼\n👁️x3 Triple-Blink to Exit")
 
             p.setFont(QFont("Segoe UI", 9, QFont.Bold))
             if self.scroll_velocity > 0:
@@ -260,14 +277,14 @@ class SomaticCursorReticle(QWidget):
             p.drawLine(int(cx), int(cy + 4), int(cx), int(cy + 12))
 
             # Glow Pill Badge to the right of reticle
-            badge_rect = QRectF(cx + 26, cy - 14, 200, 28)
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
             p.setBrush(QBrush(QColor(15, 23, 42, 230)))
             p.setPen(QPen(QColor("#D500F9"), 1.5))
             p.drawRoundedRect(badge_rect, 6, 6)
 
             p.setFont(QFont("Segoe UI", 8, QFont.Bold))
             p.setPen(QPen(QColor("#D500F9")))
-            p.drawText(badge_rect, Qt.AlignCenter, "🟣 ZOOM LOCKED | Tilt ▲/▼\n😉 Left-Wink to Exit")
+            p.drawText(badge_rect, Qt.AlignCenter, "🟣 ZOOM LOCKED | Tilt ▲/▼\n👁️x3 Triple-Blink to Exit")
         elif self.state == "SCROLLING":
             p.setFont(QFont("Segoe UI", 9, QFont.Bold))
             p.setPen(QPen(color))

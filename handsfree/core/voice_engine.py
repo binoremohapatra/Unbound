@@ -155,3 +155,4 @@ class VoiceCommandEngine:
             "backend": self.backend_type,
             "last_command": self.router.last_command,
         }
+

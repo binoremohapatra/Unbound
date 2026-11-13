@@ -216,3 +216,4 @@ class AdaptivePersonalizationService:
             "recommendations": self.pending_recommendations,
             "frequent_commands": self.get_frequent_commands(),
         }
+

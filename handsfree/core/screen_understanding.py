@@ -287,3 +287,4 @@ class ScreenUnderstandingService:
         result = " ".join(explanation_parts)
         self.speak(result)
         return result
+

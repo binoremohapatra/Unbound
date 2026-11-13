@@ -46,13 +46,16 @@ def _build_sink(args):
 
 def _auto_discover_transports(baud: int):
     """Probe USB/BT ports, falling back smoothly to SimDevice if none connected."""
-    import serial.tools.list_ports
-    ports = list(serial.tools.list_ports.comports())
     valid_ports = []
-    for p in ports:
-        desc = p.description.lower()
-        if "usb" in desc or "ch340" in desc or "cp210" in desc or "serial" in desc:
-            valid_ports.append(p.device)
+    try:
+        import serial.tools.list_ports
+        ports = list(serial.tools.list_ports.comports())
+        for p in ports:
+            desc = p.description.lower()
+            if "usb" in desc or "ch340" in desc or "cp210" in desc or "serial" in desc:
+                valid_ports.append(p.device)
+    except Exception:
+        pass
 
     if valid_ports:
         log.info("Auto-discovered hardware COM port: %s", valid_ports[0])

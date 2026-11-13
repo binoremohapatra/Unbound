@@ -397,3 +397,4 @@ class CommandRouter:
                 "description": info.get("feedback", ""),
             })
         return catalog
+

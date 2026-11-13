@@ -102,6 +102,8 @@ def test_cursor_reticle_and_floating_kb(qapp):
     assert fk.windowFlags() & Qt.WindowDoesNotAcceptFocus
     assert fk.windowFlags() & Qt.WindowStaysOnTopHint
     assert not fk.isVisible()  # Must start hidden (NO startup popup)
+    assert not hasattr(fk, "btn_osk")  # Windows OSK trigger button removed!
+    assert not hasattr(fk, "_launch_windows_osk")
 
     dismissed = []
     fk.sig_dismissed.connect(lambda: dismissed.append(True))

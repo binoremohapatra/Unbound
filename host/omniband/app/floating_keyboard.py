@@ -8,14 +8,12 @@ Includes:
 - Full QWERTY keyboard with live word predictions
 - Drag / Hold Lock toggle button
 - Scroll Up & Scroll Down hover pads
-- 1-click 'Open Windows Native OSK' launcher
 """
 from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
 import os
-import subprocess
 import sys
 from typing import Callable, Optional
 
@@ -92,11 +90,6 @@ class FloatingKeyboardWindow(QWidget):
         lbl_title.setFont(QFont("Segoe UI", 9, QFont.Bold))
         lbl_title.setStyleSheet(f"color: {BURNT_ORANGE};")
 
-        btn_osk = QPushButton("Open Windows OSK")
-        btn_osk.setFocusPolicy(Qt.NoFocus)
-        btn_osk.setFont(QFont("Segoe UI", 8))
-        btn_osk.clicked.connect(self._launch_windows_osk)
-
         btn_close = QPushButton("▼ HIDE")
         btn_close.setFocusPolicy(Qt.NoFocus)
         btn_close.setFont(QFont("Segoe UI", 8, QFont.Bold))
@@ -105,7 +98,6 @@ class FloatingKeyboardWindow(QWidget):
 
         top_bar.addWidget(lbl_title)
         top_bar.addStretch()
-        top_bar.addWidget(btn_osk)
         top_bar.addWidget(btn_close)
         kb_layout.addLayout(top_bar)
 
@@ -314,12 +306,6 @@ class FloatingKeyboardWindow(QWidget):
         if self.on_zoom_reset_fn:
             self.on_zoom_reset_fn()
         self.sig_zoom_reset.emit()
-
-    def _launch_windows_osk(self) -> None:
-        try:
-            subprocess.Popen("osk.exe", shell=True)
-        except Exception:
-            pass
 
     # Quick Daily Action Handlers (Zero focus steal via Win32 keybd_event)
     def _send_win32_hotkey(self, *vks: int) -> None:

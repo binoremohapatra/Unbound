@@ -181,16 +181,21 @@ class TextFocusWatcher:
     def notify_click(self, x: int = -1, y: int = -1) -> None:
         """Called on click: checks immediately (t=0ms) and after settle (t=90ms)."""
         self._evaluate_click_check(x, y)
-        threading.Thread(
-            target=self._delayed_click_worker,
-            args=(x, y),
-            daemon=True,
-            name="DelayedTextClickWorker",
-        ).start()
+        if not getattr(self, "_delayed_worker_active", False):
+            self._delayed_worker_active = True
+            threading.Thread(
+                target=self._delayed_click_worker,
+                args=(x, y),
+                daemon=True,
+                name="DelayedTextClickWorker",
+            ).start()
 
     def _delayed_click_worker(self, click_x: int, click_y: int) -> None:
-        time.sleep(0.090)
-        self._evaluate_click_check(click_x, click_y)
+        try:
+            time.sleep(0.090)
+            self._evaluate_click_check(click_x, click_y)
+        finally:
+            self._delayed_worker_active = False
 
     def _evaluate_click_check(self, click_x: int, click_y: int) -> None:
         """Universal app-agnostic text field detector on Left-Click."""
@@ -217,15 +222,27 @@ class TextFocusWatcher:
             if not proc_fg or proc_fg == "unbound.exe":
                 return
 
+            pt_x, pt_y = click_x, click_y
+
             # Signal A: Universal IDC_IBEAM cursor check
             ci = CURSORINFO()
             ci.cbSize = ctypes.sizeof(CURSORINFO)
             is_ibeam = False
-            pt_x, pt_y = click_x, click_y
             if user32.GetCursorInfo(ctypes.byref(ci)):
                 is_ibeam = self._is_cursor_ibeam(ci.hCursor)
                 if pt_x == -1 or pt_y == -1:
                     pt_x, pt_y = ci.ptScreenPos.x, ci.ptScreenPos.y
+
+            # Guard: If click was inside Unbound itself (Floating Keyboard, Reticle, Main Window),
+            # never dismiss the keyboard or interfere with ongoing typing!
+            if pt_x != -1 and pt_y != -1:
+                pt = wintypes.POINT(pt_x, pt_y)
+                hwnd_pt = user32.WindowFromPoint(pt)
+                if hwnd_pt:
+                    pid_pt = wintypes.DWORD(0)
+                    user32.GetWindowThreadProcessId(hwnd_pt, ctypes.byref(pid_pt))
+                    if pid_pt.value == os.getpid():
+                        return
 
             # Signal B: Win32 Blinking Caret / Caret Window
             has_caret = False

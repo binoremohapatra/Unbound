@@ -149,8 +149,8 @@ class MainWindow(QMainWindow):
         self._chk_reticle.setChecked(True)
         self._chk_reticle.toggled.connect(lambda c: self.reticle.setVisible(c))
 
-        btn_popout_kb = QPushButton("⌨️ FLOATING KEYBOARD")
-        btn_popout_kb.clicked.connect(self._toggle_floating_keyboard)
+        btn_popout_kb = QPushButton("⌨️ Windows OSK")
+        btn_popout_kb.clicked.connect(self._launch_windows_osk)
 
         self._btn_head_mouse = QPushButton("🖱️ HEAD-MOUSE: ON [F11]")
         self._btn_head_mouse.setCheckable(True)
@@ -347,12 +347,13 @@ class MainWindow(QMainWindow):
         )
         self.webcam_tracker.start()
 
-        # 120 Hz eViacam / GameFace Delta-Velocity Integration Timer (8 ms tick)
+        # 60 FPS Consistent Cursor Integration Timer (16 ms tick)
         self._cursor_timer = QTimer(self)
-        self._cursor_timer.setInterval(8)
+        self._cursor_timer.setInterval(16)
         self._cursor_timer.timeout.connect(self._on_cursor_tick)
         self._subpixel_x: float = 0.0
         self._subpixel_y: float = 0.0
+        self._last_cursor_tick_time: float = 0.0
         self._cursor_timer.start()
 
         # 60 Hz Smooth Scroll Timer (16 ms tick)
@@ -434,10 +435,11 @@ class MainWindow(QMainWindow):
             pass
 
     def _on_cursor_tick(self) -> None:
-        """120 Hz eViacam / GameFace delta-velocity cursor integration loop."""
+        """Consistent 60 FPS delta-velocity cursor integration loop."""
         if not self.webcam_tracker.head_mouse_enabled:
             return
-        if time.perf_counter() < self.webcam_tracker.freeze_until:
+        now = time.perf_counter()
+        if now < self.webcam_tracker.freeze_until:
             return
         if self.webcam_tracker.active_clutch in ("SCROLL", "ZOOM"):
             # Cursor position is LOCKED while clutch is held!
@@ -449,7 +451,10 @@ class MainWindow(QMainWindow):
             # Zero jitter (0.0 px) and user can freely use their physical mouse
             return
 
-        dt = 0.008  # 125 Hz tick interval
+        last_t = getattr(self, "_last_cursor_tick_time", 0.0)
+        self._last_cursor_tick_time = now
+        dt = min(0.033, max(0.002, now - last_t)) if last_t > 0.0 else 0.016
+
         dx_px = vx * dt
         dy_px = vy * dt
 
@@ -758,18 +763,19 @@ class MainWindow(QMainWindow):
         self.webcam_tracker.recenter()
         self.calib.append_log(f"Profile updated: L-Wink={prof.left_wink_thresh:.2f}, R-Wink={prof.right_wink_thresh:.2f}")
 
+    def _launch_windows_osk(self) -> None:
+        """Launch Microsoft Windows Native On-Screen Keyboard (osk.exe)."""
+        if sys.platform == "win32":
+            try:
+                import subprocess
+                subprocess.Popen("osk.exe", shell=True)
+                self.calib.append_log("Launched Microsoft On-Screen Keyboard (osk.exe).")
+            except Exception as e:
+                self.calib.append_log(f"Failed to launch osk.exe: {e}")
+
     def _on_text_focus_auto_popup(self, has_focus: bool, target_hwnd: int = 0) -> None:
-        """Auto popup the 35% bottom virtual keyboard when text typing focus is detected."""
-        if has_focus:
-            if hasattr(self, "floating_kb"):
-                if target_hwnd:
-                    self.floating_kb.set_last_external_hwnd(target_hwnd)
-                if not self.floating_kb.isVisible():
-                    self.floating_kb.show()
-                    self.calib.append_log("TEXT FOCUS DETECTED: Auto-docking floating virtual keyboard above taskbar.")
-        else:
-            if hasattr(self, "floating_kb") and self.floating_kb.isVisible():
-                self.floating_kb.dismiss()
+        """Auto-popup disabled per user request: avoids popups when text field is not clicked."""
+        pass
 
     def _on_speed_slider_changed(self, val: int) -> None:
         speed = val / 10.0
@@ -788,12 +794,7 @@ class MainWindow(QMainWindow):
         self.scope.push_sample(vals, active)
 
     def _toggle_floating_keyboard(self) -> None:
-        if self.floating_kb.isVisible():
-            self.floating_kb.dismiss()
-        else:
-            if hasattr(self, "focus_watcher") and self.focus_watcher:
-                self.focus_watcher.reset_dismissal()
-            self.floating_kb.show()
+        self._launch_windows_osk()
 
     def _on_floating_kb_dismissed(self) -> None:
         if hasattr(self, "focus_watcher") and self.focus_watcher:

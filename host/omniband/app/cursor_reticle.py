@@ -161,6 +161,10 @@ class SomaticCursorReticle(QWidget):
             self.state = "NORMAL"
         self.update()
 
+    def set_paused(self, paused: bool) -> None:
+        """No-op: Looking away auto-pause disabled per user preference."""
+        pass
+
     def set_dwell_progress(self, progress: float) -> None:
         self.dwell_progress = max(0.0, min(1.0, progress))
         self.update()

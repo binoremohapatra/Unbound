@@ -97,6 +97,8 @@ def test_cursor_reticle_and_floating_kb(qapp):
 
     reticle.set_drag_locked(True)
     assert reticle.state == "DRAG_LOCKED"
+    reticle.set_drag_locked(False)
+    assert reticle.state == "NORMAL"
 
     fk = FloatingKeyboardWindow()
     assert fk.windowFlags() & Qt.WindowDoesNotAcceptFocus
@@ -431,16 +433,28 @@ def test_triple_blink_universal_exit_and_lookaway_guard():
     assert tracker.active_latch == "IDLE"
     assert len(universal_exits) == 1
 
-    # 3. Look-away auto-pause guard
+    # 3. 1-Euro tuned filter parameters
     tracker._calibrated = True
     tracker._base_x = 0.5
     tracker._base_y = 0.45
+    assert tracker.filter_dx.min_cutoff == 0.8
+    assert tracker.filter_dx.beta == 0.007
+
+    # Head turned slightly: tracks naturally without being paused or blocked
     turned_away_frame = TrackerResult(
-        tier="FACEMESH478", face_found=True, nose_tip=(0.5, 0.45), ear=0.28, left_ear=0.28, right_ear=0.28,
-        mar=0.05, eye_dist=0.12, yaw=35.0, pitch=0.0, timestamp_ms=int(t * 1000), landmarks=[],
+        tier="FACEMESH478", face_found=True, nose_tip=(0.55, 0.45), ear=0.28, left_ear=0.28, right_ear=0.28,
+        mar=0.05, eye_dist=0.12, yaw=15.0, pitch=0.0, timestamp_ms=int(t * 1000), landmarks=[],
     )
     tracker._update_velocity(turned_away_frame, now=t + 1.0, w=640, h=480)
-    assert tracker.is_looking_away is True
+    vx, vy, _ = tracker.velocity_state
+    assert vx > 0.0 or tracker._in_deadzone is True
+
+    # 4. Face lost (face_found=False): zero velocity
+    face_lost_frame = TrackerResult(
+        tier="NO_FACE", face_found=False, nose_tip=None, ear=None, left_ear=None, right_ear=None,
+        mar=None, eye_dist=None, yaw=0.0, pitch=0.0, timestamp_ms=int(t * 1000) + 50, landmarks=[],
+    )
+    tracker._update_velocity(face_lost_frame, now=t + 1.05, w=640, h=480)
     vx, vy, _ = tracker.velocity_state
     assert vx == 0.0 and vy == 0.0
 

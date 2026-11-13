@@ -107,8 +107,8 @@ class OneEuroFilter:
         t0: float = 0.0,
         x0: float = 0.0,
         dx0: float = 0.0,
-        min_cutoff: float = 0.6,
-        beta: float = 0.03,
+        min_cutoff: float = 0.8,
+        beta: float = 0.007,
         d_cutoff: float = 1.0,
     ) -> None:
         self.min_cutoff = float(min_cutoff)
@@ -401,15 +401,16 @@ class RealWebcamTracker:
         self._thread: Optional[threading.Thread] = None
         self._frame_source: Optional[FrameSource] = None
 
-        # 1-Euro Filters for relative deltas
-        self.filter_dx = OneEuroFilter(min_cutoff=0.6, beta=0.08, d_cutoff=1.0)
-        self.filter_dy = OneEuroFilter(min_cutoff=0.6, beta=0.08, d_cutoff=1.0)
+        # 1-Euro Filters for relative deltas (Tuned butter-smooth at 60 FPS)
+        self.filter_dx = OneEuroFilter(min_cutoff=0.8, beta=0.007, d_cutoff=1.0)
+        self.filter_dy = OneEuroFilter(min_cutoff=0.8, beta=0.007, d_cutoff=1.0)
 
         # Sensitivity and control (calm, precise head-mouse tracking)
         self.speed_multiplier: float = 0.6
         self.gain_x: float = 4.5
         self.gain_y: float = 5.0
-        self.min_cutoff: float = 0.6
+        self.min_cutoff: float = 0.8
+        self.beta: float = 0.007
         self.head_mouse_enabled: bool = True
 
         # Anti-slip freeze
@@ -933,40 +934,16 @@ class RealWebcamTracker:
                 base_speed = self.speed_multiplier * (excess ** 1.35) * 1600.0
                 vx = ux * base_speed * self.gain_x
                 vy = uy * base_speed * self.gain_y
-
-                # Precision Micro-Braking Near Targets (Anti-Jitter for Small Buttons):
-                # When head velocity drops below 0.004 / frame, dynamically increase damping (min_cutoff = 0.35)
-                if excess < 0.004:
-                    self.filter_dx.min_cutoff = 0.35
-                    self.filter_dy.min_cutoff = 0.35
-                    vx *= 0.20
-                    vy *= 0.20
-                elif excess < 0.025:
-                    self.filter_dx.min_cutoff = self.min_cutoff
-                    self.filter_dy.min_cutoff = self.min_cutoff
-                    vx *= 0.35
-                    vy *= 0.35
-                else:
-                    self.filter_dx.min_cutoff = self.min_cutoff
-                    self.filter_dy.min_cutoff = self.min_cutoff
+                self.filter_dx.min_cutoff = self.min_cutoff
+                self.filter_dy.min_cutoff = self.min_cutoff
         else:
             self.filter_dx.reset(now, 0.0)
             self.filter_dy.reset(now, 0.0)
 
-        # Look-Away Auto-Pause Guard (Neck Fatigue & Conversation Guard)
-        # If user turns head sharply away (|yaw| > 22.0 or |nose_x - 0.5| > 0.38 or face leaves frame)
-        is_look_away = False
-        if not res.face_found or res.nose_tip is None:
-            is_look_away = True
-        elif abs(res.yaw) > 22.0 or abs(res.nose_tip[0] - 0.5) > 0.38:
-            is_look_away = True
-
-        self.is_looking_away = is_look_away
-        if is_look_away:
+        # Natural head-mouse tracking: zero looking-away interruptions!
+        if not res.face_found or res.nose_tip is None or getattr(res, "tier", "") == "NO_FACE":
             vx = 0.0
             vy = 0.0
-            self._last_gesture_banner = "⏸️ PAUSED (LOOKING AWAY)"
-            self._gesture_banner_expire = now + 0.4
         elif now < self._freeze_until or self.active_latch != "IDLE":
             vx = 0.0
             vy = 0.0

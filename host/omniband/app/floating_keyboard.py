@@ -216,9 +216,11 @@ class FloatingKeyboardWindow(QWidget):
         self.hide()  # Explicitly hidden on startup
 
     def dismiss(self) -> None:
-        """Explicit dismissal by user - hides keyboard and emits sig_dismissed."""
-        self.hide()
-        self.sig_dismissed.emit()
+        """Explicit dismissal by user - hides keyboard."""
+        if self.isVisible():
+            self.hide()
+        else:
+            self.sig_dismissed.emit()
 
     def hideEvent(self, event) -> None:  # noqa: N802
         super().hideEvent(event)
@@ -246,7 +248,9 @@ class FloatingKeyboardWindow(QWidget):
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
         self._dock_above_taskbar()
-        self._apply_win32_noactivate()
+        if not getattr(self, "_win32_styles_applied", False):
+            self._apply_win32_noactivate()
+            self._win32_styles_applied = True
 
     def set_last_external_hwnd(self, hwnd: int) -> None:
         """Store the external window handle that held text focus."""
@@ -278,14 +282,6 @@ class FloatingKeyboardWindow(QWidget):
             user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW)
         except Exception:
             pass
-
-    def nativeEvent(self, event_type, message):  # noqa: N802
-        if sys.platform == "win32" and event_type == b"windows_generic_MSG":
-            msg = wintypes.MSG.from_address(int(message))
-            if msg.message == 0x0021:  # WM_MOUSEACTIVATE
-                # Return MA_NOACTIVATE (3) so clicking never steals focus from target app
-                return True, 3
-        return super().nativeEvent(event_type, message)
 
     def _on_drag_clicked(self) -> None:
         if self.on_toggle_drag_fn:

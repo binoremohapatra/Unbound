@@ -171,20 +171,55 @@ def test_end_to_end_pop_while_latched_cancels_in_one_tick():
 
 
 def test_handsfree_source_webcam_mock_loop_bridges(tmp_path):
-    """The REAL WebcamAdapter (mock mode, no mediapipe here) through _HFSource.poll()."""
-    src = app._HFSource("webcam")
-    try:
-        deadline = time.time() + 2.0
-        got = []
-        while time.time() < deadline and not got:
-            got = src.poll(time.perf_counter())
-            if not got:
-                time.sleep(0.02)
-        names = {e.name for e in got}
-        assert "face" in names and "head_yaw" in names
-        assert all(e.t > 0 for e in got)
-    finally:
-        src.close()
+    """_HFSource('webcam') plumbing: push→queue→poll→_hf_events translation.
+
+    Uses a stub WebcamAdapter that immediately fires one HEAD_POSE event, so this test
+    runs without a physical camera, mediapipe, or face detection. It proves the
+    _HFSource queue, push() callback, and _hf_events() name-mapping are all wired
+    correctly without any real hardware dependency.
+    """
+    import threading
+    from unittest.mock import patch
+    from handsfree.core.events import SignalEvent as HFEvent, SignalType
+
+    class _StubWebcamAdapter:
+        """Fires one mock HEAD_POSE immediately after start(), then idles."""
+        def __init__(self, on_event=None, **_kw):
+            self._on_event = on_event
+            self._stop = threading.Event()
+
+        def start(self):
+            def _run():
+                time.sleep(0.05)   # slight yield so _HFSource.__init__ finishes
+                if self._on_event and not self._stop.is_set():
+                    self._on_event(HFEvent(
+                        signal_type=SignalType.HEAD_POSE,
+                        name="pose",
+                        value={"yaw": 5.0, "pitch": -2.0, "roll": 0.5},
+                        timestamp=time.time(),
+                    ))
+            threading.Thread(target=_run, daemon=True, name="stub-webcam").start()
+
+        def stop(self):
+            self._stop.set()
+
+    target = "handsfree.adapters.webcam.WebcamAdapter"
+    with patch(target, _StubWebcamAdapter):
+        src = app._HFSource("webcam")
+        try:
+            deadline = time.time() + 3.0
+            got = []
+            while time.time() < deadline and not got:
+                got = src.poll(time.perf_counter())
+                if not got:
+                    time.sleep(0.02)
+            names = {e.name for e in got}
+            assert "face" in names and "head_yaw" in names, (
+                f"Expected 'face' and 'head_yaw' in events; got names={names}"
+            )
+            assert all(e.t > 0 for e in got)
+        finally:
+            src.close()
 
 
 def test_handsfree_source_switch_and_audio_start_clean():

@@ -1,0 +1,55 @@
+{
+  "rules": [
+    {
+      "name": "Cyberpunk 2077",
+      "executables": ["Cyberpunk2077.exe", "Cyberpunk2077_GOG.exe"],
+      "title_keywords": ["Cyberpunk 2077"],
+      "mode": 0,
+      "profile": "cyberpunk_2077_direct.json",
+      "show_hud": true,
+      "badge": "MOD ACTIVE: CYBERPUNK 2077",
+      "tts_announcement": "Cyberpunk profile active"
+    },
+    {
+      "name": "Forza Motorsport / Horizon",
+      "executables": ["ForzaHorizon5.exe", "forza_gaming.desktop.x64_release_final.exe", "ForzaMotorsport.exe"],
+      "title_keywords": ["Forza Horizon", "Forza Motorsport"],
+      "mode": 2,
+      "profile": "racing_forza.json",
+      "show_hud": true,
+      "badge": "MOD ACTIVE: FORZA RACING",
+      "tts_announcement": "Forza racing profile active"
+    },
+    {
+      "name": "GTA V / Racing Games",
+      "executables": ["GTA5.exe", "PlayGTAV.exe"],
+      "title_keywords": ["Grand Theft Auto V"],
+      "mode": 2,
+      "profile": "racing_arena.json",
+      "show_hud": true,
+      "badge": "MOD ACTIVE: GTA V",
+      "tts_announcement": "Vehicle profile active"
+    },
+    {
+      "name": "Web & Media",
+      "executables": ["msedge.exe", "chrome.exe", "brave.exe", "firefox.exe", "opera.exe", "Spotify.exe", "vlc.exe"],
+      "title_keywords": ["YouTube", "Spotify"],
+      "mode": 5,
+      "profile": "desktop_media.json",
+      "show_hud": false,
+      "badge": "MODE 5: MEDIA",
+      "tts_announcement": null
+    },
+    {
+      "name": "Workstation & Coding",
+      "executables": ["Code.exe", "Cursor.exe", "AcroRd32.exe", "WINWORD.EXE", "notepad.exe", "WindowsTerminal.exe"],
+      "title_keywords": ["Visual Studio Code", "Cursor"],
+      "mode": 1,
+      "profile": "workstation_code.json",
+      "show_hud": false,
+      "badge": "MODE 1: WORKSTATION",
+      "tts_announcement": null
+    }
+  ]
+}
+

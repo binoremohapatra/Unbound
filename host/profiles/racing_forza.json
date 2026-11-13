@@ -1,0 +1,17 @@
+{
+  "profile_name": "racing_forza",
+  "target_window": "ForzaHorizon5.exe",
+  "telemetry_source": "forza_dataout",
+  "port": 5300,
+  "assist_level_default": "LANE",
+  "target_speed_mps": 35.0,
+  "min_pulse_ticks": 2,
+  "key_bindings": {
+    "steer_left": "a",
+    "steer_right": "d",
+    "throttle": "w",
+    "brake": "s",
+    "handbrake": "space"
+  }
+}
+

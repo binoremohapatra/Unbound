@@ -4,7 +4,8 @@ pystray>=0.19
 pillow>=10
 
 # Handsfree Vision & Audio Adapters (Antas & Dishti)
-opencv-python>=4.8.0
+# Exactly one OpenCV distribution pinned to 4.x (contrib matches mediapipe wheel and includes FaceDetectorYN)
+opencv-contrib-python==4.10.0.84
 mediapipe>=0.10.0
 numpy>=1.24.0
 sounddevice>=0.4.6

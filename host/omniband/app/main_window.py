@@ -41,6 +41,8 @@ from host.omniband.app.floating_keyboard import FloatingKeyboardWindow
 from host.omniband.app.cursor_reticle import SomaticCursorReticle
 from host.omniband.tracking.webcam_tracker import RealWebcamTracker
 from host.omniband.tracking.physical_keys import PhysicalKeyPoller
+from host.omniband.hardware.ble_client import OmniBandBleClient
+from host.omniband.hardware.hardware_calibration import HardwareCalibrator
 
 
 class MainWindow(QMainWindow):
@@ -48,6 +50,9 @@ class MainWindow(QMainWindow):
 
     sig_biometric_click = Signal()
     sig_drag_toggle = Signal()
+    sig_ble_connection = Signal(bool, str)
+    sig_ble_metrics = Signal(int, float)
+    sig_ble_frame = Signal(list, list, int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -121,6 +126,13 @@ class MainWindow(QMainWindow):
         self._lbl_tier.setFont(QFont("Cascadia Code", 10, QFont.Bold))
         self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
+        self._btn_scan_ble = QPushButton("🔵 Scan / Connect BLE Headband")
+        self._btn_scan_ble.clicked.connect(self._on_scan_ble_clicked)
+
+        self._lbl_ble_metrics = QLabel("BLE: Disconnected")
+        self._lbl_ble_metrics.setFont(QFont("Cascadia Code", 9))
+        self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+
         btn_toggle_hud = QPushButton("Toggle Tactical HUD")
         btn_toggle_hud.clicked.connect(self._toggle_hud)
 
@@ -159,6 +171,8 @@ class MainWindow(QMainWindow):
         top_bar.addSpacing(12)
         top_bar.addWidget(self._chk_reticle)
         top_bar.addWidget(self._lbl_tier)
+        top_bar.addWidget(self._btn_scan_ble)
+        top_bar.addWidget(self._lbl_ble_metrics)
         top_bar.addStretch()
         top_bar.addWidget(btn_toggle_hud)
         top_bar.addWidget(btn_release)
@@ -190,7 +204,9 @@ class MainWindow(QMainWindow):
         self.keyboard = SomaticKeyboardWidget(on_type_fn=self._inject_keyboard_char)
         self.arena = ArenaWidget()
         self.icu = IcuView()
-        self.calib = CalibrationView()
+        self.calibrator = HardwareCalibrator()
+        self.calib = CalibrationView(calibrator=self.calibrator)
+        self.calib.sig_apply_thresholds.connect(self.scope.set_thresholds)
 
         # Camera Preview Tab
         self.camera_tab = QWidget()
@@ -337,6 +353,20 @@ class MainWindow(QMainWindow):
             on_release_all=self._emergency_release_all,
         )
         self.watcher.start()
+
+        # Connect BLE Signals
+        self.sig_ble_connection.connect(self._on_ble_connection_event)
+        self.sig_ble_metrics.connect(self._on_ble_metrics_event)
+        self.sig_ble_frame.connect(self._on_ble_frame_event)
+
+        # Native BLE Client for OmniBand Headband
+        self.ble_client = OmniBandBleClient(
+            calibrator=self.calibrator,
+            on_somatic_frame=lambda ch, act, seq: self.sig_ble_frame.emit(ch, act, seq),
+            on_connection_change=lambda conn, name: self.sig_ble_connection.emit(conn, name),
+            on_metrics_update=lambda rssi, rate: self.sig_ble_metrics.emit(rssi, rate),
+        )
+        self.ble_client.start()
 
     def _on_webcam_frame(self, frame_rgb) -> None:
         try:
@@ -822,6 +852,65 @@ class MainWindow(QMainWindow):
             veto_text="STATUS: OK",
             bar_vals=[0.2, 0.4, 0.3, 0.5]
         )
+
+    def _on_scan_ble_clicked(self) -> None:
+        self.calib.append_log("Operator triggered BLE Scan / Connect.")
+        self.status.showMessage("Scanning for OmniBand-BLE headband...", 3000)
+        self.ble_client.trigger_scan_connect()
+
+    def _on_ble_connection_event(self, connected: bool, message: str) -> None:
+        if connected:
+            self._lbl_ble_metrics.setText(f"BLE: Connected")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self.status.showMessage(f"🔵 BLE HEADBAND CONNECTED: {message}", 4000)
+            self.calib.append_log(f"BLE CONNECTED: {message}")
+            self._update_tier_badge()
+        else:
+            self._lbl_ble_metrics.setText("BLE: Disconnected")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self.status.showMessage(f"BLE Disconnected ({message}). Falling back...", 3000)
+            self.calib.append_log(f"BLE DISCONNECTED: {message}")
+            # Safe handoff: release all inputs within < 150ms grace
+            self.gw.release_all("BLE disconnect failsafe")
+            self._update_tier_badge()
+        self.calib.set_ble_metrics(connected, message, self.ble_client.rssi, self.ble_client.packet_rate)
+
+    def _on_ble_metrics_event(self, rssi: int, rate: float) -> None:
+        self._lbl_ble_metrics.setText(f"BLE: {rate:.1f} pkt/s | {rssi} dBm")
+        self.calib.set_ble_metrics(self.ble_client.is_connected, "OmniBand-BLE", rssi, rate)
+
+    def _on_ble_frame_event(self, ch_vals: list[float], active: list[bool], seq: int) -> None:
+        # Feed calibration wizard if active
+        self.calib.feed_sample(ch_vals)
+        # Push to oscilloscope
+        self.scope.push_sample(ch_vals, active)
+
+        # Dispatch physical edges for each active channel
+        if not hasattr(self, "_last_ble_active"):
+            self._last_ble_active = [False, False, False, False]
+
+        for i in range(4):
+            act = active[i]
+            if act != self._last_ble_active[i]:
+                self._last_ble_active[i] = act
+                self._on_physical_edge(i + 1, act, ch_vals[i])
+
+    def _update_tier_badge(self) -> None:
+        ble_on = self.ble_client.is_connected
+        opt_on = self.webcam_tracker.head_mouse_enabled and self.webcam_tracker.is_alive()
+
+        if ble_on and opt_on:
+            self._lbl_tier.setText("ACTIVE: TIER 2 (BLE + OPTICAL HYBRID)")
+            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+        elif ble_on:
+            self._lbl_tier.setText("ACTIVE: TIER 1 (BLE WIRELESS)")
+            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+        elif opt_on:
+            self._lbl_tier.setText("ACTIVE: TIER 3 (OPTICAL)")
+            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+        else:
+            self._lbl_tier.setText("ACTIVE: TIER 1 (USB)")
+            self._lbl_tier.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
     def _set_assist_level(self, level: str) -> None:
         self.calib.append_log(f"Co-Pilot assist level changed to: {level}")

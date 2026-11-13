@@ -4,13 +4,14 @@ from PyInstaller.utils.hooks import collect_data_files, collect_submodules, coll
 block_cipher = None
 
 mp_datas, mp_binaries, mp_hidden = collect_all('mediapipe')
+bleak_datas, bleak_binaries, bleak_hidden = collect_all('bleak')
 
 datas = [
     ('host/profiles/*.json', 'host/profiles'),
     ('protocol/constants.json', 'protocol'),
     ('models/*', 'models'),
     ('face_landmarker.task', '.'),
-] + mp_datas
+] + mp_datas + bleak_datas
 
 hiddenimports = [
     'PySide6.QtCore',
@@ -32,17 +33,27 @@ hiddenimports = [
     'host.omniband.tracking.paths',
     'host.omniband.tracking.webcam_tracker',
     'host.omniband.tracking.physical_keys',
+    'host.omniband.hardware.ble_client',
+    'host.omniband.hardware.hardware_calibration',
     'host.omniband.copilot.types',
     'host.omniband.copilot.sim.vehicle',
     'host.omniband.copilot.sim.track',
     'host.omniband.adapters.telemetry.native_arena',
+    'bleak',
+    'bleak.backends.winrt',
+    'bleak.backends.winrt.client',
+    'bleak.backends.winrt.scanner',
+    'winrt',
+    'winrt.windows.devices.bluetooth',
+    'winrt.windows.devices.bluetooth.genericattributeprofile',
+    'winrt.windows.devices.enumeration',
     'mediapipe',
     'cv2',
     'scipy',
     'scipy.spatial',
-] + mp_hidden
+] + mp_hidden + bleak_hidden
 
-binaries = mp_binaries
+binaries = mp_binaries + bleak_binaries
 
 a = Analysis(
     ['host/omniband_engine.py'],

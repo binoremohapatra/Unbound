@@ -1,5 +1,6 @@
 // link.cpp - NDJSON link layer. See protocol/PROTOCOL.md for wire format.
 #include "link.h"
+#include "ble_transport.h"
 #include <BluetoothSerial.h>
 #include <Preferences.h>
 #include <esp_system.h>
@@ -43,10 +44,15 @@ void Link::begin(uint32_t baud) {
     baud_ = baud;
     Serial.begin(baud);
     Serial.setTimeout(0);
+    g_ble.begin();
     if (SerialBT.begin("OmniBand-V2")) {
         SerialBT.setTimeout(0);
     }
     hello_sent_ = false;
+}
+
+void Link::send_ble_somatic(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4) {
+    g_ble.notify_frame(ch1, ch2, ch3, ch4, seq_++);
 }
 
 void Link::set_baud(uint32_t baud) {
@@ -59,6 +65,7 @@ void Link::set_baud(uint32_t baud) {
 void Link::tx(const String& line) {
     Serial.println(line);
     if (SerialBT.hasClient()) SerialBT.println(line);
+    if (g_ble.is_connected()) g_ble.notify_line(line + "\n");
 }
 
 void Link::send_raw(const String& line) { tx(line); }
@@ -285,6 +292,11 @@ void Link::poll() {
                 l.trim(); handle_line(l, "bt");
             } else if (ch != '\r' && bt_buf_.length() < 240) bt_buf_ += ch;
         }
+    }
+    if (g_ble.has_rx()) {
+        String rx = g_ble.pop_rx();
+        rx.trim();
+        if (rx.length() > 0) handle_line(rx, "ble");
     }
 
     int64_t now = (int64_t)(esp_timer_get_time() / 1000);

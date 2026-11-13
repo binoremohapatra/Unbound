@@ -151,3 +151,17 @@ class OscilloscopeWidget(QWidget):
         self._canvas.set_threshold(ch, frac)
         self._labels[ch].setText(f"{frac:.2f}")
 
+    def set_thresholds(self, thresholds: List[float]) -> None:
+        """Programmatically set and sync threshold sliders from auto-calibration."""
+        for ch in range(min(4, len(thresholds))):
+            frac = max(0.0, min(1.0, float(thresholds[ch])))
+            val = int(frac * 100.0)
+            if ch < len(self._sliders):
+                self._sliders[ch].blockSignals(True)
+                self._sliders[ch].setValue(val)
+                self._sliders[ch].blockSignals(False)
+            if ch < len(self._labels):
+                self._labels[ch].setText(f"{frac:.2f}")
+            self._canvas.set_threshold(ch, frac)
+
+

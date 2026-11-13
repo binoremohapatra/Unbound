@@ -418,8 +418,33 @@ class MainWindow(QMainWindow):
                 from ctypes import wintypes
                 user32 = ctypes.windll.user32
 
+                pt = wintypes.POINT()
+                user32.GetCursorPos(ctypes.byref(pt))
+
+                # Virtual desktop dimensions for multi-monitor / Shell / Taskbar targeting
+                SM_XVIRTUALSCREEN = 76
+                SM_YVIRTUALSCREEN = 77
+                SM_CXVIRTUALSCREEN = 78
+                SM_CYVIRTUALSCREEN = 79
+
+                vx = user32.GetSystemMetrics(SM_XVIRTUALSCREEN)
+                vy = user32.GetSystemMetrics(SM_YVIRTUALSCREEN)
+                vw = user32.GetSystemMetrics(SM_CXVIRTUALSCREEN)
+                vh = user32.GetSystemMetrics(SM_CYVIRTUALSCREEN)
+
+                norm_x = int(((pt.x - vx) * 65535) / (vw - 1)) if vw > 1 else 0
+                norm_y = int(((pt.y - vy) * 65535) / (vh - 1)) if vh > 1 else 0
+
+                MOUSEEVENTF_MOVE = 0x0001
                 MOUSEEVENTF_LEFTDOWN = 0x0002
                 MOUSEEVENTF_LEFTUP = 0x0004
+                MOUSEEVENTF_VIRTUALDESK = 0x4000
+                MOUSEEVENTF_ABSOLUTE = 0x8000
+
+                flags_down = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTDOWN
+                flags_up = MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE | MOUSEEVENTF_LEFTUP
+
+                ULONG_PTR = ctypes.c_uint64 if ctypes.sizeof(ctypes.c_void_p) == 8 else ctypes.c_uint32
 
                 class MOUSEINPUT(ctypes.Structure):
                     _fields_ = [
@@ -428,30 +453,48 @@ class MainWindow(QMainWindow):
                         ("mouseData", wintypes.DWORD),
                         ("dwFlags", wintypes.DWORD),
                         ("time", wintypes.DWORD),
-                        ("dwExtraInfo", ctypes.c_size_t),
+                        ("dwExtraInfo", ULONG_PTR),
                     ]
 
-                class INPUT_UNION(ctypes.Union):
-                    _fields_ = [("mi", MOUSEINPUT)]
+                class KEYBDINPUT(ctypes.Structure):
+                    _fields_ = [
+                        ("wVk", wintypes.WORD),
+                        ("wScan", wintypes.WORD),
+                        ("dwFlags", wintypes.DWORD),
+                        ("time", wintypes.DWORD),
+                        ("dwExtraInfo", ULONG_PTR),
+                    ]
+
+                class HARDWAREINPUT(ctypes.Structure):
+                    _fields_ = [
+                        ("uMsg", wintypes.DWORD),
+                        ("wParamL", wintypes.WORD),
+                        ("wParamH", wintypes.WORD),
+                    ]
+
+                class _INPUT_UNION(ctypes.Union):
+                    _fields_ = [("mi", MOUSEINPUT), ("ki", KEYBDINPUT), ("hi", HARDWAREINPUT)]
 
                 class INPUT(ctypes.Structure):
-                    _fields_ = [
-                        ("type", wintypes.DWORD),
-                        ("u", INPUT_UNION),
-                    ]
+                    _fields_ = [("type", wintypes.DWORD), ("u", _INPUT_UNION)]
 
                 def _click_once() -> None:
-                    inp_down = INPUT(type=0, u=INPUT_UNION(mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTDOWN, 0, 0)))
-                    inp_up = INPUT(type=0, u=INPUT_UNION(mi=MOUSEINPUT(0, 0, 0, MOUSEEVENTF_LEFTUP, 0, 0)))
-                    # Try SendInput first
-                    res1 = user32.SendInput(1, ctypes.byref(inp_down), ctypes.sizeof(INPUT))
-                    if res1 == 0:
+                    # 1. Primary path: SendInput with exact 40-byte 64-bit struct & absolute virtual coords
+                    inp_down = INPUT(type=0, u=_INPUT_UNION(mi=MOUSEINPUT(norm_x, norm_y, 0, flags_down, 0, 0)))
+                    inp_up = INPUT(type=0, u=_INPUT_UNION(mi=MOUSEINPUT(norm_x, norm_y, 0, flags_up, 0, 0)))
+
+                    res_down = user32.SendInput(1, ctypes.byref(inp_down), ctypes.sizeof(INPUT))
+                    if res_down == 0:
+                        # Fallback 1: mouse_event with absolute virtual coordinates
+                        user32.mouse_event(flags_down, norm_x, norm_y, 0, 0)
+                        # Fallback 2: relative mouse_event
                         user32.mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
 
                     time.sleep(0.045)  # Natural human button dwell
 
-                    res2 = user32.SendInput(1, ctypes.byref(inp_up), ctypes.sizeof(INPUT))
-                    if res2 == 0:
+                    res_up = user32.SendInput(1, ctypes.byref(inp_up), ctypes.sizeof(INPUT))
+                    if res_up == 0:
+                        user32.mouse_event(flags_up, norm_x, norm_y, 0, 0)
                         user32.mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
                 is_dbl = hasattr(self, "_chk_double_click") and self._chk_double_click.isChecked()

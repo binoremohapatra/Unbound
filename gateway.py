@@ -65,9 +65,42 @@ if ctypes.sizeof(ctypes.c_void_p) == 8:
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
 KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE = 0x0001, 0x0002, 0x0008
 MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+MOUSEEVENTF_ABSOLUTE = 0x8000
 MOUSE_FLAGS = {  # name -> (down, up)
     "left": (0x0002, 0x0004), "right": (0x0008, 0x0010), "middle": (0x0020, 0x0040),
 }
+
+
+def get_virtual_desktop_bounds() -> tuple[int, int, int, int]:
+    """Return (vx, vy, vw, vh) of the entire virtual desktop span."""
+    if os.name != "nt":
+        return (0, 0, 1920, 1080)
+    try:
+        u32 = ctypes.windll.user32
+        vx = u32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
+        vy = u32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
+        vw = u32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
+        vh = u32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+        if vw > 0 and vh > 0:
+            return (vx, vy, vw, vh)
+    except Exception:
+        pass
+    return (0, 0, 1920, 1080)
+
+
+def normalize_virtual_coords(px: int, py: int) -> tuple[int, int]:
+    """Convert desktop pixel coordinates into normalized 0..65535 absolute virtual coordinates."""
+    vx, vy, vw, vh = get_virtual_desktop_bounds()
+    norm_x = int(((px - vx) * 65535) / (vw - 1)) if vw > 1 else 0
+    norm_y = int(((py - vy) * 65535) / (vh - 1)) if vh > 1 else 0
+    return (max(0, min(65535, norm_x)), max(0, min(65535, norm_y)))
 
 # DirectX / set-1 hardware scancodes. (code, extended)
 SCANCODES: dict[str, tuple[int, bool]] = {
@@ -144,9 +177,15 @@ def build_key_input(name: str, down: bool) -> INPUT:
     return inp
 
 
-def build_mouse_button_input(name: str, down: bool) -> INPUT:
+def build_mouse_button_input(name: str, down: bool, px: Optional[int] = None, py: Optional[int] = None) -> INPUT:
     inp = INPUT(type=INPUT_MOUSE)
-    inp.u.mi = MOUSEINPUT(0, 0, 0, MOUSE_FLAGS[name][0 if down else 1], 0, 0)
+    flag = MOUSE_FLAGS[name][0 if down else 1]
+    if px is not None and py is not None:
+        norm_x, norm_y = normalize_virtual_coords(px, py)
+        flag |= (MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE)
+        inp.u.mi = MOUSEINPUT(norm_x, norm_y, 0, flag, 0, 0)
+    else:
+        inp.u.mi = MOUSEINPUT(0, 0, 0, flag, 0, 0)
     return inp
 
 

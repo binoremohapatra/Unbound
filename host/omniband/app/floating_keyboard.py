@@ -63,11 +63,8 @@ class FloatingKeyboardWindow(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.resize(920, 310)
 
-        # Position at bottom-center of primary screen
-        if sys.platform == "win32":
-            sw = ctypes.windll.user32.GetSystemMetrics(0)
-            sh = ctypes.windll.user32.GetSystemMetrics(1)
-            self.move((sw - 920) // 2, sh - 330)
+        # Position docked above the Taskbar work area
+        self._dock_above_taskbar()
 
         root = QHBoxLayout(self)
         root.setContentsMargins(8, 8, 8, 8)
@@ -135,8 +132,28 @@ class FloatingKeyboardWindow(QWidget):
 
         self.setStyleSheet(f"background-color: rgba(24, 26, 27, 0.95); border: 2px solid {BURNT_ORANGE}; border-radius: 8px;")
 
+    def _dock_above_taskbar(self) -> None:
+        """Position window docked cleanly ABOVE the Taskbar work area.
+
+        Uses primaryScreen().availableGeometry() (not full geometry)
+        so it never covers the bottom 48-60px Windows Taskbar, Start button, or tray!
+        """
+        screen = QApplication.primaryScreen()
+        kb_w, kb_h = self.width(), self.height()
+        if screen:
+            avail = screen.availableGeometry()
+            dock_x = avail.x() + (avail.width() - kb_w) // 2
+            # 12px padding above taskbar
+            dock_y = avail.y() + avail.height() - kb_h - 12
+            self.move(dock_x, dock_y)
+        elif sys.platform == "win32":
+            sw = ctypes.windll.user32.GetSystemMetrics(0)
+            sh = ctypes.windll.user32.GetSystemMetrics(1)
+            self.move((sw - kb_w) // 2, sh - kb_h - 60)
+
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._dock_above_taskbar()
         self._apply_win32_noactivate()
 
     def _apply_win32_noactivate(self) -> None:

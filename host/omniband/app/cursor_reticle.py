@@ -22,13 +22,48 @@ import time
 
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QTimer, QRectF
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont
+from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import Qt, QTimer, QRectF
+from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QRegion
 
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOPMOST = 0x00000008
+WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
+
+
+def enforce_click_through_hwnd(hwnd: int) -> None:
+    """Force Win32 extended click-through styles so OS hit-tests never trap on overlay."""
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        target = (
+            style
+            | WS_EX_LAYERED
+            | WS_EX_TRANSPARENT
+            | WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_NOACTIVATE
+        )
+        if (style & (WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE)) != (
+            WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE
+        ):
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, target)
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOACTIVATE = 0x0010
+            user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE
+            )
+    except Exception:
+        pass
 
 
 class SomaticCursorReticle(QWidget):
@@ -47,6 +82,10 @@ class SomaticCursorReticle(QWidget):
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
         self.setFixedSize(56, 56)
 
+        # Apply hollow 6x6 px center hole so cursor pixel does not belong to this window
+        self._update_hollow_mask()
+        self._style_check_counter = 0
+
         self.state = "NORMAL"  # NORMAL, CLICKED, DRAG_LOCKED, SCROLLING
         self.dwell_progress = 0.0  # 0.0 to 1.0
         self._click_expire = 0.0
@@ -57,24 +96,31 @@ class SomaticCursorReticle(QWidget):
         self._timer.timeout.connect(self._sync_position)
         self._timer.start()
 
+    def _update_hollow_mask(self) -> None:
+        """Punch a 6x6 pixel hole in the exact center where the cursor hotspot sits.
+
+        Result: The exact pixel under (cursor_x, cursor_y) physically does NOT belong
+        to any Unbound.exe window at the OS window manager level. WindowFromPoint
+        is guaranteed to hit Shell_TrayWnd (Taskbar), StartMenuExperienceHost,
+        or the target desktop app!
+        """
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        full_region = QRegion(0, 0, w, h)
+        cx, cy = w // 2, h // 2
+        center_hole = QRegion(cx - 3, cy - 3, 6, 6)
+        self.setMask(full_region.subtracted(center_hole))
+
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._update_hollow_mask()
         self._apply_win32_styles()
 
     def _apply_win32_styles(self) -> None:
         if sys.platform != "win32":
             return
-        try:
-            hwnd = int(self.winId())
-            user32 = ctypes.windll.user32
-            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            user32.SetWindowLongW(
-                hwnd,
-                GWL_EXSTYLE,
-                style | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE
-            )
-        except Exception:
-            pass
+        enforce_click_through_hwnd(int(self.winId()))
 
     def trigger_click_flash(self) -> None:
         self.state = "CLICKED"
@@ -100,6 +146,10 @@ class SomaticCursorReticle(QWidget):
             ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
             # Center the 56x56 reticle around the cursor hotspot
             self.move(pt.x - 28, pt.y - 28)
+            self._style_check_counter += 1
+            if self._style_check_counter >= 15:
+                self._style_check_counter = 0
+                enforce_click_through_hwnd(int(self.winId()))
 
         # Check click expiration
         if self.state == "CLICKED" and time.perf_counter() >= self._click_expire:

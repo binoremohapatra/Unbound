@@ -52,10 +52,17 @@ class SomaticKeyboardWidget(QWidget):
     """Hands-Free Somatic Keyboard with Grid Scanning & Dwell."""
 
     sig_key_typed = Signal(str)
+    sig_dismiss = Signal()
 
-    def __init__(self, on_type_fn: Optional[Callable[[str], None]] = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        on_type_fn: Optional[Callable[[str], None]] = None,
+        on_dismiss_fn: Optional[Callable[[], None]] = None,
+        parent: QWidget | None = None,
+    ) -> None:
         super().__init__(parent)
         self.on_type_fn = on_type_fn
+        self.on_dismiss_fn = on_dismiss_fn
 
         # Layout definitions
         self.grid_rows = [
@@ -63,7 +70,7 @@ class SomaticKeyboardWidget(QWidget):
             ["1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "-", "="],
             ["Q", "W", "E", "R", "T", "Y", "U", "I", "O", "P", "[", "]"],
             ["A", "S", "D", "F", "G", "H", "J", "K", "L", ";", "'"],
-            ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "SHIFT", "CLEAR"],
+            ["Z", "X", "C", "V", "B", "N", "M", ",", ".", "/", "SHIFT", "CLEAR", "▼ HIDE"],
         ]
 
         # Scanner cursor position
@@ -218,6 +225,11 @@ class SomaticKeyboardWidget(QWidget):
             return
         elif key == "SHIFT":
             self.shift_active = not self.shift_active
+            return
+        elif key in ("HIDE", "▼ HIDE"):
+            self.sig_dismiss.emit()
+            if self.on_dismiss_fn:
+                self.on_dismiss_fn()
             return
         else:
             char = key.lower() if not self.shift_active else key.upper()

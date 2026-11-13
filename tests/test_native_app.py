@@ -101,6 +101,59 @@ def test_cursor_reticle_and_floating_kb(qapp):
     fk = FloatingKeyboardWindow()
     assert fk.windowFlags() & Qt.WindowDoesNotAcceptFocus
     assert fk.windowFlags() & Qt.WindowStaysOnTopHint
+    assert not fk.isVisible()  # Must start hidden (NO startup popup)
+
+    dismissed = []
+    fk.sig_dismissed.connect(lambda: dismissed.append(True))
+    fk.dismiss()
+    assert len(dismissed) == 1
+    assert not fk.isVisible()
+
+
+def test_smart_virtual_keyboard_auto_popup_and_dismissal(qapp):
+    from host.omniband.app.text_focus_watcher import TextFocusWatcher, TARGET_TEXT_APPS
+    from host.omniband.app.somatic_keyboard import SomaticKeyboardWidget
+
+    # 1. Target apps list check
+    assert "whatsapp.exe" in TARGET_TEXT_APPS
+    assert "chrome.exe" in TARGET_TEXT_APPS
+    assert "notepad.exe" in TARGET_TEXT_APPS
+    assert "code.exe" in TARGET_TEXT_APPS
+    assert "msedge.exe" in TARGET_TEXT_APPS
+
+    # 2. Somatic Keyboard has HIDE key and dismiss signal
+    sk = SomaticKeyboardWidget()
+    assert "▼ HIDE" in sk.grid_rows[4]
+    sk_dismissed = []
+    sk.sig_dismiss.connect(lambda: sk_dismissed.append(True))
+    sk._on_key_clicked("▼ HIDE")
+    assert len(sk_dismissed) == 1
+
+    # 3. TextFocusWatcher lifecycle and dismissal latch
+    focus_events = []
+    watcher = TextFocusWatcher(on_text_focus_changed=lambda f: focus_events.append(f))
+
+    # Initial state: startup suppressed & dismissed (NEVER pops up on startup!)
+    assert watcher.is_dismissed is True
+    assert watcher.is_text_focused is False
+
+    # Simulate focus transition
+    watcher.simulate_focus(True)
+    assert watcher.is_text_focused is True
+    assert len(focus_events) == 1
+    assert focus_events[-1] is True
+
+    # User clicks [▼ HIDE] -> dismiss()
+    watcher.dismiss()
+    assert watcher.is_dismissed is True
+    assert watcher.is_text_focused is False
+
+    # Reset dismissal latch on fresh click
+    watcher.reset_dismissal()
+    assert watcher.is_dismissed is False
+
+    # Clean shutdown
+    watcher.stop()
 
 
 def test_main_window_camera_controls_and_120hz_loop(qapp, monkeypatch):

@@ -78,6 +78,8 @@ class MainWindow(QMainWindow):
             on_zoom_fn=self._inject_zoom_step,
             on_zoom_reset_fn=self._inject_zoom_reset,
         )
+        self.floating_kb.sig_dismissed.connect(self._on_floating_kb_dismissed)
+        self.floating_kb.hide()
 
         self.tray = SystemTrayAgent(self)
         self.tray.show()
@@ -481,6 +483,8 @@ class MainWindow(QMainWindow):
         """Triggered by EAR double-blink, deliberate long blink, or MAR quick jaw tap."""
         if hasattr(self, "reticle"):
             self.reticle.trigger_click_flash()
+        if hasattr(self, "focus_watcher") and self.focus_watcher:
+            self.focus_watcher.notify_click()
         if hasattr(self, "_chk_head_mouse") and not self._chk_head_mouse.isChecked():
             return
 
@@ -744,9 +748,15 @@ class MainWindow(QMainWindow):
 
     def _toggle_floating_keyboard(self) -> None:
         if self.floating_kb.isVisible():
-            self.floating_kb.hide()
+            self.floating_kb.dismiss()
         else:
+            if hasattr(self, "focus_watcher") and self.focus_watcher:
+                self.focus_watcher.reset_dismissal()
             self.floating_kb.show()
+
+    def _on_floating_kb_dismissed(self) -> None:
+        if hasattr(self, "focus_watcher") and self.focus_watcher:
+            self.focus_watcher.dismiss()
 
     def _toggle_head_mouse(self) -> None:
         new_state = not self.webcam_tracker.head_mouse_enabled

@@ -43,6 +43,7 @@ class FloatingKeyboardWindow(QWidget):
     sig_toggle_drag = Signal()
     sig_zoom = Signal(int)  # +1 for in, -1 for out
     sig_zoom_reset = Signal()
+    sig_dismissed = Signal()
 
     def __init__(
         self,
@@ -92,9 +93,10 @@ class FloatingKeyboardWindow(QWidget):
         btn_osk.setFont(QFont("Segoe UI", 8))
         btn_osk.clicked.connect(self._launch_windows_osk)
 
-        btn_close = QPushButton("✕ Hide")
+        btn_close = QPushButton("▼ HIDE")
         btn_close.setFont(QFont("Segoe UI", 8, QFont.Bold))
-        btn_close.clicked.connect(self.hide)
+        btn_close.setStyleSheet(f"background: {SURFACE_2}; color: {BURNT_ORANGE}; border: 1px solid #555; border-radius: 4px; padding: 2px 8px;")
+        btn_close.clicked.connect(self.dismiss)
 
         top_bar.addWidget(lbl_title)
         top_bar.addStretch()
@@ -102,7 +104,8 @@ class FloatingKeyboardWindow(QWidget):
         top_bar.addWidget(btn_close)
         kb_layout.addLayout(top_bar)
 
-        self.somatic_kb = SomaticKeyboardWidget(on_type_fn=self.on_type_fn)
+        self.somatic_kb = SomaticKeyboardWidget(on_type_fn=self.on_type_fn, on_dismiss_fn=self.dismiss)
+        self.somatic_kb.sig_dismiss.connect(self.dismiss)
         kb_layout.addWidget(self.somatic_kb)
         root.addWidget(kb_container, stretch=5)
 
@@ -157,6 +160,16 @@ class FloatingKeyboardWindow(QWidget):
         root.addLayout(action_dock, stretch=1)
 
         self.setStyleSheet(f"background-color: rgba(24, 26, 27, 0.95); border: 2px solid {BURNT_ORANGE}; border-radius: 8px;")
+        self.hide()  # Explicitly hidden on startup
+
+    def dismiss(self) -> None:
+        """Explicit dismissal by user - hides keyboard and emits sig_dismissed."""
+        self.hide()
+        self.sig_dismissed.emit()
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        super().hideEvent(event)
+        self.sig_dismissed.emit()
 
     def _dock_above_taskbar(self) -> None:
         """Position window docked cleanly ABOVE the Taskbar work area.

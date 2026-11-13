@@ -491,8 +491,17 @@
     <div class="card osk-section">
       <h2>
         <span>OptiKey On-Screen Keyboard</span>
-        <span style="font-size: 0.8rem; color: var(--accent);">Dwell-to-Type Active</span>
+        <span style="font-size: 0.8rem; color: var(--accent);" id="oskDwellStatus">Dwell-to-Type Active</span>
       </h2>
+
+      <!-- OSK Dwell Sensitivity Control -->
+      <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem; padding:0.4rem 0.5rem; background:#0f172a; border-radius:6px; font-size:0.8rem;">
+        <span style="color:var(--muted); white-space:nowrap;">⏱ Dwell Time:</span>
+        <input type="range" id="oskDwellSlider" min="600" max="3000" step="100" value="1500"
+          style="flex:1; accent-color:var(--accent);">
+        <span id="oskDwellLabel" style="color:var(--accent); min-width:3rem; text-align:right;">1500ms</span>
+        <button id="oskDwellToggle" style="padding:0.25rem 0.6rem; border-radius:4px; border:1px solid var(--accent); background:transparent; color:var(--accent); cursor:pointer; font-size:0.75rem;">ON</button>
+      </div>
 
       <!-- Typed Text Buffer -->
       <div class="osk-display">
@@ -596,6 +605,29 @@
       ]
     ];
 
+    // ── OSK Dwell Config ──────────────────────────────────────────────────────
+    let OSK_DWELL_MS = 1500;      // Default 1.5s — prevents accidental triggers
+    let OSK_DWELL_ENABLED = true; // Can toggle off for physical mouse users
+
+    const oskDwellSlider = document.getElementById('oskDwellSlider');
+    const oskDwellLabel  = document.getElementById('oskDwellLabel');
+    const oskDwellToggle = document.getElementById('oskDwellToggle');
+    const oskDwellStatus = document.getElementById('oskDwellStatus');
+
+    oskDwellSlider.addEventListener('input', () => {
+      OSK_DWELL_MS = parseInt(oskDwellSlider.value);
+      oskDwellLabel.textContent = OSK_DWELL_MS + 'ms';
+    });
+
+    oskDwellToggle.addEventListener('click', () => {
+      OSK_DWELL_ENABLED = !OSK_DWELL_ENABLED;
+      oskDwellToggle.textContent = OSK_DWELL_ENABLED ? 'ON' : 'OFF';
+      oskDwellToggle.style.color = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
+      oskDwellToggle.style.borderColor = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
+      oskDwellStatus.textContent = OSK_DWELL_ENABLED ? 'Dwell-to-Type Active' : 'Dwell OFF – Click Only';
+      oskDwellStatus.style.color = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
+    });
+
     function renderKeyboard() {
       virtualKeyboard.innerHTML = '';
       LAYOUT.forEach(row => {
@@ -622,21 +654,54 @@
             sendWS({ type: "osk_key", key: key.label });
           });
 
-          // Single clean dwell-hover on OSK keys
-          let hoverTimer = null;
-          let startTime = 0;
-          let hasActuated = false;
-          const DWELL_MS = 600;
+          // ── Dwell-hover on OSK keys — velocity-aware, stability-gated ────────
+          let hoverTimer   = null;
+          let startTime    = 0;
+          let hasActuated  = false;
+          // Velocity / stability tracking
+          let enterX = 0, enterY = 0;
+          let stableStart = 0;
+          let lastMoveTime = 0;
+          const STABILITY_WAIT_MS = 200; // cursor must be stable 200ms before dwell counts
+          const DRIFT_PX          = 8;   // px cursor can drift within key before resetting
 
-          keyEl.addEventListener('mouseenter', () => {
-            startTime = performance.now();
+          keyEl.addEventListener('mousemove', (ev) => {
+            const dx = ev.clientX - enterX;
+            const dy = ev.clientY - enterY;
+            if (Math.hypot(dx, dy) > DRIFT_PX) {
+              // Cursor moved — reset stability clock & progress bar
+              enterX = ev.clientX;
+              enterY = ev.clientY;
+              stableStart = performance.now();
+              lastMoveTime = stableStart;
+              fillEl.style.height = '0%';
+              hasActuated = false;
+              if (hoverTimer) { clearInterval(hoverTimer); hoverTimer = null; }
+            }
+          });
+
+          keyEl.addEventListener('mouseenter', (ev) => {
+            enterX = ev.clientX;
+            enterY = ev.clientY;
+            stableStart = performance.now();
+            lastMoveTime = stableStart;
             hasActuated = false;
+            fillEl.style.height = '0%';
             sendWS({ type: "osk_hover", key: key.label });
+
+            if (!OSK_DWELL_ENABLED) return;
 
             hoverTimer = setInterval(() => {
               if (hasActuated) return;
-              const elapsed = performance.now() - startTime;
-              const prog = Math.min(1.0, elapsed / DWELL_MS);
+              const now = performance.now();
+              const timeSinceMove = now - lastMoveTime;
+              // Don't start counting until cursor has been stable for STABILITY_WAIT_MS
+              if (timeSinceMove < STABILITY_WAIT_MS) {
+                fillEl.style.height = '0%';
+                return;
+              }
+              const elapsed = now - (stableStart + STABILITY_WAIT_MS);
+              const prog = Math.min(1.0, elapsed / Math.max(100, OSK_DWELL_MS - STABILITY_WAIT_MS));
               fillEl.style.height = `${prog * 100}%`;
 
               if (prog >= 1.0) {

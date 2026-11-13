@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Handsfree HUD & OptiKey OSK</title>
+  <title>Unbound Handsfree: Assistive AI Platform</title>
   <style>
     :root {
       --bg: #090d16;
@@ -34,9 +34,11 @@
       display: flex;
       justify-content: space-between;
       align-items: center;
-      margin-bottom: 1.25rem;
+      margin-bottom: 1rem;
       padding-bottom: 0.75rem;
       border-bottom: 1px solid var(--border);
+      flex-wrap: wrap;
+      gap: 0.75rem;
     }
 
     .brand {
@@ -46,7 +48,7 @@
     }
 
     .brand h1 {
-      font-size: 1.4rem;
+      font-size: 1.35rem;
       font-weight: 700;
       letter-spacing: -0.02em;
     }
@@ -61,13 +63,55 @@
       text-transform: uppercase;
     }
 
+    .nav-tabs {
+      display: flex;
+      gap: 0.4rem;
+      background: #0f172a;
+      padding: 0.3rem;
+      border-radius: 8px;
+      border: 1px solid var(--border);
+    }
+
+    .nav-tab {
+      padding: 0.45rem 0.9rem;
+      border-radius: 6px;
+      border: none;
+      background: transparent;
+      color: var(--muted);
+      font-size: 0.85rem;
+      font-weight: 600;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: all 0.15s ease;
+    }
+
+    .nav-tab:hover {
+      color: var(--text);
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .nav-tab.active {
+      background: var(--card-bg);
+      color: var(--accent);
+      border: 1px solid var(--border);
+      box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    }
+
+    .header-badges {
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
     .status-badge {
       display: inline-flex;
       align-items: center;
       gap: 0.5rem;
       padding: 0.35rem 0.75rem;
       border-radius: 9999px;
-      font-size: 0.85rem;
+      font-size: 0.8rem;
       background: var(--card-bg);
       border: 1px solid var(--border);
     }
@@ -80,9 +124,13 @@
     }
     .dot.connected { background: var(--success); }
 
+    /* Layout */
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+
     .main-layout {
       display: grid;
-      grid-template-columns: 340px 1fr;
+      grid-template-columns: 320px 1fr;
       gap: 1.25rem;
     }
 
@@ -107,7 +155,7 @@
     .card h2 {
       font-size: 0.95rem;
       color: var(--muted);
-      margin-bottom: 1rem;
+      margin-bottom: 0.85rem;
       text-transform: uppercase;
       letter-spacing: 0.05em;
       display: flex;
@@ -180,16 +228,15 @@
     }
 
     .dwell-btn {
-      background: var(--key-bg);
-      color: var(--text);
+      padding: 0.6rem;
       border: 1px solid var(--border);
-      padding: 0.5rem;
-      border-radius: 8px;
+      background: #090d16;
+      color: var(--text);
+      border-radius: 6px;
+      cursor: pointer;
       font-size: 0.8rem;
       font-weight: 600;
-      cursor: pointer;
       transition: all 0.15s ease;
-      text-align: center;
     }
 
     .dwell-btn:hover, .dwell-btn.active {
@@ -200,13 +247,11 @@
 
     .dwell-circle-wrap {
       display: flex;
-      align-items: center;
       justify-content: center;
-      margin: 1rem 0;
+      margin: 0.5rem 0;
     }
 
     .dwell-circle {
-      position: relative;
       width: 70px;
       height: 70px;
       border-radius: 50%;
@@ -214,7 +259,7 @@
       display: flex;
       align-items: center;
       justify-content: center;
-      box-shadow: 0 0 15px rgba(56, 189, 248, 0.2);
+      transition: background 0.05s linear;
     }
 
     .dwell-circle-inner {
@@ -227,29 +272,28 @@
       justify-content: center;
       font-size: 0.8rem;
       font-weight: 700;
-      font-family: monospace;
+      color: var(--accent);
     }
 
     /* OptiKey On-Screen Keyboard Section */
     .osk-section {
       display: flex;
       flex-direction: column;
-      gap: 1rem;
+      gap: 0.75rem;
     }
 
     .osk-display {
       background: #090d16;
       border: 2px solid var(--border);
-      border-radius: 10px;
+      border-radius: 8px;
       padding: 1rem;
-      min-height: 80px;
-      font-size: 1.3rem;
-      font-family: monospace;
-      color: #fff;
+      min-height: 70px;
+      font-size: 1.25rem;
+      color: #f1f5f9;
       display: flex;
       align-items: center;
       justify-content: space-between;
-      box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+      letter-spacing: 0.02em;
     }
 
     .cursor-blink {
@@ -257,9 +301,8 @@
       width: 3px;
       height: 1.3rem;
       background: var(--accent);
-      animation: blink 1s infinite;
       margin-left: 4px;
-      vertical-align: middle;
+      animation: blink 1s step-end infinite;
     }
 
     @keyframes blink {
@@ -267,33 +310,60 @@
       50% { opacity: 0; }
     }
 
-    /* Word Prediction Bar (OptiKey) */
+    /* Prediction and Quick Phrase Toolbar */
     .prediction-bar {
       display: flex;
       gap: 0.5rem;
       overflow-x: auto;
-      padding-bottom: 0.25rem;
+      padding: 0.35rem 0;
+      align-items: center;
     }
 
     .predict-chip {
       background: #1e293b;
-      border: 1px solid var(--accent);
-      color: var(--accent);
-      padding: 0.5rem 1rem;
-      border-radius: 8px;
+      border: 1px solid var(--border);
+      color: #cbd5e1;
+      padding: 0.45rem 1rem;
+      border-radius: 9999px;
       font-size: 0.95rem;
       font-weight: 600;
       cursor: pointer;
-      position: relative;
-      overflow: hidden;
-      flex: 1;
-      text-align: center;
-      transition: background 0.15s;
+      white-space: nowrap;
+      transition: all 0.15s ease;
     }
 
-    .predict-chip:hover {
+    .predict-chip:hover, .predict-chip.head-hovered {
       background: var(--accent);
       color: #090d16;
+      border-color: var(--accent);
+      transform: scale(1.04);
+    }
+
+    .phrase-drawer {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.4rem;
+      padding: 0.5rem;
+      background: #0a0f1d;
+      border-radius: 8px;
+      border: 1px dashed var(--border);
+    }
+
+    .phrase-chip {
+      background: #1e293b;
+      color: #94a3b8;
+      border: 1px solid var(--border);
+      padding: 0.3rem 0.7rem;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      cursor: pointer;
+      transition: all 0.15s ease;
+    }
+
+    .phrase-chip:hover {
+      background: var(--accent);
+      color: #090d16;
+      border-color: var(--accent);
     }
 
     /* Virtual Keyboard Grid */
@@ -302,9 +372,10 @@
       flex-direction: column;
       gap: 0.45rem;
       background: #090d16;
-      padding: 1rem;
-      border-radius: 12px;
+      padding: 0.75rem;
+      border-radius: 8px;
       border: 1px solid var(--border);
+      user-select: none;
     }
 
     .keyboard-row {
@@ -314,31 +385,24 @@
     }
 
     .osk-key {
-      position: relative;
       background: var(--key-bg);
-      color: var(--text);
       border: 1px solid var(--border);
-      border-radius: 8px;
+      border-radius: 6px;
+      color: var(--text);
+      font-weight: 600;
+      font-size: 1.05rem;
       height: 52px;
-      font-size: 1rem;
-      font-weight: 700;
       display: flex;
       align-items: center;
       justify-content: center;
       cursor: pointer;
-      user-select: none;
+      position: relative;
       overflow: hidden;
-      transition: border-color 0.15s, transform 0.05s;
+      transition: background 0.1s, transform 0.05s;
     }
 
-    .osk-key:hover {
-      border-color: var(--accent);
-      background: var(--key-hover);
-    }
-
-    .osk-key:active {
-      transform: scale(0.97);
-    }
+    .osk-key:hover { background: var(--key-hover); }
+    .osk-key:active { transform: scale(0.97); }
 
     .osk-key .dwell-fill-bar {
       position: absolute;
@@ -356,39 +420,10 @@
     .osk-key.action-clear { background: #451a1a; color: #f87171; }
     .osk-key.action-bksp { background: #3b2a1a; color: #fbbf24; }
 
-    .osk-key.head-hovered, .predict-chip.head-hovered, .action-btn.head-hovered {
+    .osk-key.head-hovered {
       border-color: #38bdf8 !important;
       box-shadow: 0 0 16px rgba(56, 189, 248, 0.6);
       transform: scale(1.03);
-    }
-
-    /* Floating Head Pointer Cursor (Hidden: native Windows cursor is used directly) */
-    .head-cursor {
-      display: none !important;
-    }
-
-    /* Action pills */
-    .pill-container {
-      display: flex;
-      flex-wrap: wrap;
-      gap: 0.4rem;
-    }
-
-    .pill {
-      padding: 0.35rem 0.65rem;
-      border-radius: 6px;
-      background: #090d16;
-      border: 1px solid var(--border);
-      font-size: 0.8rem;
-      font-weight: 600;
-      color: var(--muted);
-    }
-
-    .pill.active {
-      background: var(--accent);
-      color: #090d16;
-      border-color: var(--accent);
-      box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
     }
 
     .btn-secondary {
@@ -402,17 +437,189 @@
       cursor: pointer;
     }
     .btn-secondary:hover { background: #334155; }
+
+    /* Action pills */
+    .pill-container { display: flex; flex-wrap: wrap; gap: 0.4rem; }
+    .pill {
+      padding: 0.35rem 0.65rem;
+      border-radius: 6px;
+      background: #090d16;
+      border: 1px solid var(--border);
+      font-size: 0.8rem;
+      font-weight: 600;
+      color: var(--muted);
+    }
+    .pill.active {
+      background: var(--accent);
+      color: #090d16;
+      border-color: var(--accent);
+      box-shadow: 0 0 10px rgba(56, 189, 248, 0.4);
+    }
+
+    /* Voice Commands Tab */
+    .voice-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+    }
+
+    @media (max-width: 900px) {
+      .voice-grid { grid-template-columns: 1fr; }
+    }
+
+    .cmd-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 0.85rem;
+    }
+
+    .cmd-table th, .cmd-table td {
+      padding: 0.6rem 0.8rem;
+      border-bottom: 1px solid var(--border);
+      text-align: left;
+    }
+
+    .cmd-table th { color: var(--muted); text-transform: uppercase; font-size: 0.75rem; }
+    .cmd-table tr:hover { background: rgba(56, 189, 248, 0.05); }
+
+    .cmd-run-btn {
+      padding: 0.25rem 0.6rem;
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: var(--accent);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.75rem;
+      font-weight: 600;
+    }
+    .cmd-run-btn:hover { background: var(--accent); color: #090d16; }
+
+    /* Screen Understanding Tab */
+    .screen-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 1.25rem;
+    }
+
+    .action-card-btn {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      width: 100%;
+      padding: 1rem;
+      background: #0f172a;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      color: var(--text);
+      cursor: pointer;
+      font-size: 0.95rem;
+      font-weight: 600;
+      transition: all 0.15s ease;
+      margin-bottom: 0.75rem;
+    }
+
+    .action-card-btn:hover {
+      background: #1e293b;
+      border-color: var(--accent);
+    }
+
+    /* Guardian Tab */
+    .guardian-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+    }
+
+    .guardian-status-box {
+      background: #090d16;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      padding: 1rem;
+    }
+
+    .guardian-status-box.active {
+      border-color: var(--success);
+      box-shadow: 0 0 12px rgba(34, 197, 94, 0.2);
+    }
+
+    .guardian-status-box.warning {
+      border-color: var(--warning);
+    }
+
+    /* Personalization Tab */
+    .recommendation-card {
+      background: #0f172a;
+      border: 1px solid var(--accent);
+      border-radius: 8px;
+      padding: 1rem;
+      margin-bottom: 0.75rem;
+      box-shadow: 0 0 12px rgba(56, 189, 248, 0.15);
+    }
+
+    .rec-actions {
+      display: flex;
+      gap: 0.5rem;
+      margin-top: 0.75rem;
+    }
+
+    .btn-approve {
+      padding: 0.4rem 0.9rem;
+      background: var(--success);
+      border: none;
+      color: #090d16;
+      border-radius: 4px;
+      cursor: pointer;
+      font-weight: 700;
+      font-size: 0.8rem;
+    }
+
+    .btn-dismiss {
+      padding: 0.4rem 0.9rem;
+      background: #1e293b;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      border-radius: 4px;
+      cursor: pointer;
+      font-size: 0.8rem;
+    }
+
+    .btn-danger {
+      background: #451a1a;
+      color: #f87171;
+      border: 1px solid #ef4444;
+      padding: 0.5rem 1rem;
+      border-radius: 6px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+    .btn-danger:hover { background: #ef4444; color: #fff; }
   </style>
 </head>
 <body>
+
+  <!-- Header -->
   <header>
     <div class="brand">
-      <h1>Unbound Handsfree HUD</h1>
-      <span class="badge-sub">Gameface • Tracky • OptiKey</span>
+      <h1>Unbound Handsfree</h1>
+      <span class="badge-sub">AI Assistive Controller</span>
     </div>
-    <div style="display:flex; align-items:center; gap:0.75rem;">
-      <div id="blinkBadge" class="status-badge" style="border-color:#38bdf8; color:#38bdf8; transition:all 0.15s ease;">
+
+    <!-- Navigation Tabs -->
+    <div class="nav-tabs">
+      <button class="nav-tab active" data-tab="oskView">⌨️ Keyboard & HUD</button>
+      <button class="nav-tab" data-tab="voiceView">🎙️ Voice Commands</button>
+      <button class="nav-tab" data-tab="screenView">👁️ Screen AI</button>
+      <button class="nav-tab" data-tab="guardianView">🛡️ Guardian Health</button>
+      <button class="nav-tab" data-tab="personalView">⚙️ Adaptive Settings</button>
+    </div>
+
+    <div class="header-badges">
+      <div id="blinkBadge" class="status-badge" style="border-color:#38bdf8; color:#38bdf8;">
         <span>👁️ Double-Blink: <b>Ready</b></span>
+      </div>
+      <div class="status-badge" id="hardwareBadge">
+        <div id="hwDot" class="dot"></div>
+        <span id="hwStatusText">Webcam Fallback</span>
       </div>
       <div class="status-badge">
         <div id="statusDot" class="dot"></div>
@@ -421,142 +628,341 @@
     </div>
   </header>
 
-  <div class="main-layout">
-    <!-- Left Sidebar: Vision, Pose & Dwell Telemetry -->
-    <div class="sidebar">
-      <!-- Analog Stick & Aim Canvas -->
-      <div class="card stick-container">
+  <!-- ==================== TAB 1: KEYBOARD & TELEMETRY ==================== -->
+  <div id="oskView" class="tab-content active">
+    <div class="main-layout">
+      <!-- Left Sidebar: Vision, Pose & Dwell Telemetry -->
+      <div class="sidebar">
+        <!-- Analog Stick & Aim Canvas -->
+        <div class="card stick-container">
+          <h2>
+            <span>Head Tracking Stick</span>
+            <button class="btn-secondary" id="recenterBtn">Recenter (C)</button>
+          </h2>
+          <canvas id="stickCanvas" width="180" height="180"></canvas>
+          <div class="meter-value" id="stickCoords" style="width: auto; font-size: 0.85rem;">X: 0.00 | Y: 0.00</div>
+        </div>
+
+        <!-- Tracky Mouse Dwell Clicker Panel -->
+        <div class="card">
+          <h2>Tracky Mouse Dwell Clicker</h2>
+          <div class="dwell-circle-wrap">
+            <div class="dwell-circle" id="dwellCircle">
+              <div class="dwell-circle-inner" id="dwellPercent">0%</div>
+            </div>
+          </div>
+          <div class="dwell-modes">
+            <button class="dwell-btn active" data-action="left_click">Left Click</button>
+            <button class="dwell-btn" data-action="right_click">Right Click</button>
+            <button class="dwell-btn" data-action="double_click">Double Click</button>
+            <button class="dwell-btn" data-action="drag_toggle">Drag / Drop</button>
+          </div>
+        </div>
+
+        <!-- Head Pose Angles -->
+        <div class="card">
+          <h2>Orientation & Acoustics</h2>
+          <div class="meter-group">
+            <div class="meter-row">
+              <span class="meter-label">Yaw (Steer)</span>
+              <div class="meter-bar"><div id="yawBar" class="meter-fill"></div></div>
+              <span class="meter-value" id="yawVal">0.0°</span>
+            </div>
+            <div class="meter-row">
+              <span class="meter-label">Pitch (Aim)</span>
+              <div class="meter-bar"><div id="pitchBar" class="meter-fill"></div></div>
+              <span class="meter-value" id="pitchVal">0.0°</span>
+            </div>
+            <div class="meter-row">
+              <span class="meter-label">Roll (Tilt)</span>
+              <div class="meter-bar"><div id="rollBar" class="meter-fill"></div></div>
+              <span class="meter-value" id="rollVal">0.0°</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Active Gamepad Buttons -->
+        <div class="card">
+          <h2>Controller State</h2>
+          <div class="pill-container" id="buttonList">
+            <span class="pill" data-key="A">A</span>
+            <span class="pill" data-key="B">B</span>
+            <span class="pill" data-key="X">X</span>
+            <span class="pill" data-key="Y">Y</span>
+            <span class="pill" data-key="LB">LB</span>
+            <span class="pill" data-key="RB">RB</span>
+            <span class="pill" data-key="START">START</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Right: OptiKey Accessible On-Screen Keyboard -->
+      <div class="card osk-section">
         <h2>
-          <span>Head Tracking Stick</span>
-          <button class="btn-secondary" id="recenterBtn">Recenter</button>
+          <span>OptiKey Smart On-Screen Keyboard</span>
+          <span style="font-size: 0.8rem; color: var(--accent);" id="oskDwellStatus">Dwell-to-Type Active</span>
         </h2>
-        <canvas id="stickCanvas" width="180" height="180"></canvas>
-        <div class="meter-value" id="stickCoords" style="width: auto; font-size: 0.85rem;">X: 0.00 | Y: 0.00</div>
-      </div>
 
-      <!-- Tracky Mouse Dwell Clicker Panel -->
-      <div class="card">
-        <h2>Tracky Mouse Dwell Clicker</h2>
-        <div class="dwell-circle-wrap">
-          <div class="dwell-circle" id="dwellCircle">
-            <div class="dwell-circle-inner" id="dwellPercent">0%</div>
-          </div>
+        <!-- Dwell Sensitivity Control Bar -->
+        <div style="display:flex; align-items:center; gap:0.75rem; padding:0.4rem 0.6rem; background:#0f172a; border-radius:6px; font-size:0.8rem;">
+          <span style="color:var(--muted); white-space:nowrap;">⏱ Dwell Duration:</span>
+          <input type="range" id="oskDwellSlider" min="600" max="3000" step="100" value="1500" style="flex:1; accent-color:var(--accent);">
+          <span id="oskDwellLabel" style="color:var(--accent); min-width:3.2rem; text-align:right;">1500ms</span>
+          <button id="oskDwellToggle" style="padding:0.25rem 0.6rem; border-radius:4px; border:1px solid var(--accent); background:transparent; color:var(--accent); cursor:pointer; font-size:0.75rem;">ON</button>
+          <button id="togglePhrasesBtn" style="padding:0.25rem 0.6rem; border-radius:4px; border:1px solid var(--border); background:#1e293b; color:var(--text); cursor:pointer; font-size:0.75rem;">⚡ Quick Phrases</button>
         </div>
-        <div class="dwell-modes">
-          <button class="dwell-btn active" data-action="left_click">Left Click</button>
-          <button class="dwell-btn" data-action="right_click">Right Click</button>
-          <button class="dwell-btn" data-action="double_click">Double Click</button>
-          <button class="dwell-btn" data-action="drag_toggle">Drag / Drop</button>
-        </div>
-      </div>
 
-      <!-- Head Pose Angles -->
-      <div class="card">
-        <h2>Orientation & Acoustics</h2>
-        <div class="meter-group">
-          <div class="meter-row">
-            <span class="meter-label">Yaw (Steer)</span>
-            <div class="meter-bar"><div id="yawBar" class="meter-fill"></div></div>
-            <span class="meter-value" id="yawVal">0.0°</span>
-          </div>
-          <div class="meter-row">
-            <span class="meter-label">Pitch (Aim)</span>
-            <div class="meter-bar"><div id="pitchBar" class="meter-fill"></div></div>
-            <span class="meter-value" id="pitchVal">0.0°</span>
-          </div>
-          <div class="meter-row">
-            <span class="meter-label">Roll (Tilt)</span>
-            <div class="meter-bar"><div id="rollBar" class="meter-fill"></div></div>
-            <span class="meter-value" id="rollVal">0.0°</span>
-          </div>
+        <!-- Quick Phrases Drawer -->
+        <div class="phrase-drawer" id="phraseDrawer" style="display:none;">
+          <div style="width:100%; font-size:0.75rem; color:var(--muted); margin-bottom:0.25rem;">Frequently Used Phrases (Click or Dwell to send):</div>
+          <!-- Filled dynamically -->
         </div>
-      </div>
 
-      <!-- Active Gamepad Buttons -->
-      <div class="card">
-        <h2>Controller State</h2>
-        <div class="pill-container" id="buttonList">
-          <span class="pill" data-key="A">A</span>
-          <span class="pill" data-key="B">B</span>
-          <span class="pill" data-key="X">X</span>
-          <span class="pill" data-key="Y">Y</span>
-          <span class="pill" data-key="LB">LB</span>
-          <span class="pill" data-key="RB">RB</span>
-          <span class="pill" data-key="START">START</span>
+        <!-- Typed Text Buffer -->
+        <div class="osk-display">
+          <span id="typedText">Type with head dwelling, double-blink, or clicks...</span>
+          <span class="cursor-blink"></span>
+        </div>
+
+        <!-- AI Word Prediction Bar (3-5 items) -->
+        <div class="prediction-bar" id="predictionBar">
+          <div class="predict-chip" data-word="hello">hello</div>
+          <div class="predict-chip" data-word="help">help</div>
+          <div class="predict-chip" data-word="handsfree">handsfree</div>
+          <div class="predict-chip" data-word="yes">yes</div>
+          <div class="predict-chip" data-word="thank you">thank you</div>
+        </div>
+
+        <!-- QWERTY Keyboard Layout -->
+        <div class="keyboard-container" id="virtualKeyboard">
+          <!-- Rendered dynamically -->
         </div>
       </div>
     </div>
+  </div>
 
-    <!-- Right: OptiKey Accessible On-Screen Keyboard -->
-    <div class="card osk-section">
+  <!-- ==================== TAB 2: VOICE COMMANDS ==================== -->
+  <div id="voiceView" class="tab-content">
+    <div class="voice-grid">
+      <!-- Voice Status & Live Mic Feed -->
+      <div class="card">
+        <h2>
+          <span>🎙️ AI Voice Command Agent</span>
+          <button class="btn-secondary" id="toggleVoiceMicBtn">Start Listening</button>
+        </h2>
+        <div style="background:#090d16; border:1px solid var(--border); border-radius:8px; padding:1rem; margin-bottom:1rem;">
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:0.5rem;">
+            <span style="font-size:0.8rem; color:var(--muted);">Voice Recognition Status:</span>
+            <span id="voiceBackendLabel" style="font-size:0.75rem; color:var(--accent);">Ready</span>
+          </div>
+          <div id="voiceStatusBadge" style="font-size:1.1rem; font-weight:600; color:var(--success);">
+            Listening & Ready
+          </div>
+          <div style="margin-top:0.75rem; font-size:0.85rem; color:var(--muted);">
+            Last Spoken Command: <b id="voiceLastCmd" style="color:#f8fafc;">None</b>
+          </div>
+          <div style="margin-top:0.25rem; font-size:0.85rem; color:var(--muted);">
+            Execution Feedback: <span id="voiceFeedbackText" style="color:var(--accent);">-</span>
+          </div>
+        </div>
+
+        <div style="margin-bottom:1rem;">
+          <label style="font-size:0.8rem; color:var(--muted); display:block; margin-bottom:0.4rem;">Test Speech Command Input:</label>
+          <div style="display:flex; gap:0.5rem;">
+            <input type="text" id="manualVoiceInput" placeholder="e.g. 'open google', 'read screen', 'new tab'"
+              style="flex:1; padding:0.6rem; background:#090d16; border:1px solid var(--border); border-radius:6px; color:#fff;">
+            <button class="btn-secondary" id="sendManualVoiceBtn">Run Command</button>
+          </div>
+        </div>
+
+        <div style="font-size:0.8rem; color:var(--muted); line-height:1.4;">
+          💡 <b>Voice Safety:</b> All voice inputs run through a strict allowlist registry with duplicate suppression. Arbitrary shell commands are prevented.
+        </div>
+      </div>
+
+      <!-- Command Catalog Table -->
+      <div class="card">
+        <h2>Allowlisted Command Reference</h2>
+        <div style="max-height: 480px; overflow-y:auto;">
+          <table class="cmd-table">
+            <thead>
+              <tr>
+                <th>Category</th>
+                <th>Spoken Voice Command</th>
+                <th>Action</th>
+                <th>Test</th>
+              </tr>
+            </thead>
+            <tbody id="commandTableBody">
+              <!-- Dynamically populated -->
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TAB 3: SCREEN UNDERSTANDING ==================== -->
+  <div id="screenView" class="tab-content">
+    <div class="screen-grid">
+      <div class="card">
+        <h2>👁️ Screen Understanding Actions</h2>
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1.25rem;">
+          Inspects visible Windows UI controls, buttons, and dialogs. Reads content aloud using accessibility APIs and local processing.
+        </p>
+
+        <button class="action-card-btn" id="btnReadScreen">
+          <span style="font-size:1.5rem;">🔊</span>
+          <div>
+            <div>Read Visible Screen</div>
+            <div style="font-size:0.75rem; color:var(--muted);">Reads foreground window title, controls, and main buttons aloud</div>
+          </div>
+        </button>
+
+        <button class="action-card-btn" id="btnExplainDialog">
+          <span style="font-size:1.5rem;">💬</span>
+          <div>
+            <div>Explain Active Dialog</div>
+            <div style="font-size:0.75rem; color:var(--muted);">Analyzes error prompts, confirmation messages, and available choices</div>
+          </div>
+        </button>
+
+        <div style="margin-top:1.25rem;">
+          <label style="font-size:0.85rem; color:var(--muted); display:block; margin-bottom:0.4rem;">Locate Element Spatial Position:</label>
+          <div style="display:flex; gap:0.5rem;">
+            <input type="text" id="findElementInput" placeholder="e.g. 'Search', 'Close', 'Submit', 'OK'"
+              style="flex:1; padding:0.6rem; background:#090d16; border:1px solid var(--border); border-radius:6px; color:#fff;">
+            <button class="btn-secondary" id="btnFindElement">Locate Button</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <h2>Screen Assistant Analysis Output</h2>
+        <div id="screenAnalysisBox" style="min-height:220px; background:#090d16; border:1px solid var(--border); border-radius:8px; padding:1.25rem; font-size:0.95rem; line-height:1.5; color:#cbd5e1;">
+          Tap "Read Visible Screen" or "Explain Active Dialog" to hear and see AI screen analysis.
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TAB 4: GUARDIAN & AUTO-RECOVERY ==================== -->
+  <div id="guardianView" class="tab-content">
+    <div class="card" style="margin-bottom:1.25rem;">
       <h2>
-        <span>OptiKey On-Screen Keyboard</span>
-        <span style="font-size: 0.8rem; color: var(--accent);" id="oskDwellStatus">Dwell-to-Type Active</span>
+        <span>🛡️ AI Software Guardian & Fail-Safe Supervisor</span>
+        <button class="btn-danger" id="btnEmergencyStop">🛑 Emergency Stop</button>
       </h2>
+      <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">
+        Monitors wearable USB headband signals, webcam fallback health, and enforces instant safe input release upon connection loss.
+      </p>
 
-      <!-- OSK Dwell Sensitivity Control -->
-      <div style="display:flex; align-items:center; gap:0.75rem; margin-bottom:0.5rem; padding:0.4rem 0.5rem; background:#0f172a; border-radius:6px; font-size:0.8rem;">
-        <span style="color:var(--muted); white-space:nowrap;">⏱ Dwell Time:</span>
-        <input type="range" id="oskDwellSlider" min="600" max="3000" step="100" value="1500"
-          style="flex:1; accent-color:var(--accent);">
-        <span id="oskDwellLabel" style="color:var(--accent); min-width:3rem; text-align:right;">1500ms</span>
-        <button id="oskDwellToggle" style="padding:0.25rem 0.6rem; border-radius:4px; border:1px solid var(--accent); background:transparent; color:var(--accent); cursor:pointer; font-size:0.75rem;">ON</button>
-      </div>
+      <div class="guardian-grid">
+        <div class="guardian-status-box" id="guardianHwBox">
+          <div style="font-size:0.8rem; color:var(--muted); text-transform:uppercase;">Primary Hardware</div>
+          <div id="guardianHwStatus" style="font-size:1.15rem; font-weight:700; color:#f87171; margin:0.3rem 0;">Disconnected</div>
+          <div style="font-size:0.8rem; color:var(--muted);">Freshness: <span id="guardianHwFreshness">-</span></div>
+        </div>
 
-      <!-- Typed Text Buffer -->
-      <div class="osk-display">
-        <span id="typedText">Type with head dwelling or clicks...</span>
-        <span class="cursor-blink"></span>
-      </div>
+        <div class="guardian-status-box active" id="guardianCamBox">
+          <div style="font-size:0.8rem; color:var(--muted); text-transform:uppercase;">Webcam Fallback</div>
+          <div id="guardianCamStatus" style="font-size:1.15rem; font-weight:700; color:var(--success); margin:0.3rem 0;">Active & Tracking</div>
+          <div style="font-size:0.8rem; color:var(--muted);">Face Tracking: <span id="guardianCamTracking">Stable</span> | FPS: <span id="guardianCamFps">30.0</span></div>
+        </div>
 
-      <!-- OptiKey Word Prediction Bar -->
-      <div class="prediction-bar" id="predictionBar">
-        <div class="predict-chip" data-word="hello">hello</div>
-        <div class="predict-chip" data-word="help">help</div>
-        <div class="predict-chip" data-word="handsfree">handsfree</div>
-        <div class="predict-chip" data-word="yes">yes</div>
-        <div class="predict-chip" data-word="thank you">thank you</div>
-      </div>
-
-      <!-- QWERTY Keyboard Layout -->
-      <div class="keyboard-container" id="virtualKeyboard">
-        <!-- Rendered dynamically -->
+        <div class="guardian-status-box" id="guardianVoiceBox">
+          <div style="font-size:0.8rem; color:var(--muted); text-transform:uppercase;">Voice Recognition</div>
+          <div id="guardianVoiceStatus" style="font-size:1.15rem; font-weight:700; color:var(--accent); margin:0.3rem 0;">Listening</div>
+          <div style="font-size:0.8rem; color:var(--muted);">Fail-Safe Handover: Automatic</div>
+        </div>
       </div>
     </div>
 
-    <div class="card" id="omnibandCard" style="display:none;">
-      <h2>OmniBand V2</h2>
-      <div class="meter-group">
-        <div class="meter-row">
-          <span class="meter-label">Mode</span>
-          <span class="meter-value" id="obMode">-</span>
-        </div>
-        <div class="meter-row">
-          <span class="meter-label">Link</span>
-          <span class="meter-value" id="obLink">-</span>
-        </div>
-        <div class="meter-row">
-          <span class="meter-label">FSM</span>
-          <span class="meter-value" id="obFsm">-</span>
-        </div>
-        <div class="meter-row">
-          <span class="meter-label">Last Gesture</span>
-          <span class="meter-value" id="obGes">-</span>
+    <div class="card">
+      <h2>Safety Incidents & Handover Logs</h2>
+      <div id="guardianLogBox" style="background:#090d16; border:1px solid var(--border); border-radius:8px; padding:1rem; font-family:monospace; font-size:0.85rem; color:#94a3b8; max-height:220px; overflow-y:auto;">
+        <div>[System]: Software Guardian initialized. Primary fail-safe mechanism armed.</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ==================== TAB 5: ADAPTIVE PERSONALIZATION ==================== -->
+  <div id="personalView" class="tab-content">
+    <div class="main-layout">
+      <!-- Profile Controls -->
+      <div class="card">
+        <h2>
+          <span>Adaptive Accessibility Settings</span>
+          <button class="btn-secondary" id="btnResetProfile">Reset Defaults</button>
+        </h2>
+
+        <div style="display:flex; flex-direction:column; gap:1rem;">
+          <div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.25rem;">
+              <span>Head Yaw Range (Sensitivity X):</span>
+              <b id="lblAngleX">20.0°</b>
+            </div>
+            <input type="range" id="sliderAngleX" min="8" max="35" step="1" value="20" style="width:100%; accent-color:var(--accent);">
+          </div>
+
+          <div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.25rem;">
+              <span>Head Pitch Range (Sensitivity Y):</span>
+              <b id="lblAngleY">15.0°</b>
+            </div>
+            <input type="range" id="sliderAngleY" min="6" max="30" step="1" value="15" style="width:100%; accent-color:var(--accent);">
+          </div>
+
+          <div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.25rem;">
+              <span>Deadzone Dampening:</span>
+              <b id="lblDeadzone">2.5°</b>
+            </div>
+            <input type="range" id="sliderDeadzone" min="0.5" max="6.0" step="0.5" value="2.5" style="width:100%; accent-color:var(--accent);">
+          </div>
+
+          <div>
+            <div style="display:flex; justify-content:space-between; font-size:0.85rem; margin-bottom:0.25rem;">
+              <span>Tracky Dwell Click Duration:</span>
+              <b id="lblDwell">1500ms</b>
+            </div>
+            <input type="range" id="sliderDwell" min="600" max="3000" step="100" value="1500" style="width:100%; accent-color:var(--accent);">
+          </div>
         </div>
       </div>
-      <div class="meter-group" id="obEnvList"></div>
-      <div style="margin-top: 0.75rem; color: var(--muted); font-size: 0.8rem;" id="obStats"></div>
-    </div>
-  </main>
 
-  <div id="headCursor" class="head-cursor" style="display:none;">
-    <div class="head-cursor-dot"></div>
+      <!-- AI Recommendations Panel -->
+      <div class="card">
+        <h2>AI Adaptive Recommendations</h2>
+        <p style="font-size:0.85rem; color:var(--muted); margin-bottom:1rem;">
+          Recommendations are generated based on dwell slips and interaction patterns. Settings are never applied without your explicit approval.
+        </p>
+
+        <div id="recommendationsList">
+          <div style="font-size:0.85rem; color:var(--muted); font-style:italic;">No pending recommendations at this time. Current settings match your motor patterns.</div>
+        </div>
+      </div>
+    </div>
   </div>
 
   <script>
-    const headCursor = document.getElementById('headCursor');
+    // ── Navigation Tabs ──────────────────────────────────────────────────────
+    document.querySelectorAll('.nav-tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.nav-tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        const targetId = tab.dataset.tab;
+        const targetContent = document.getElementById(targetId);
+        if (targetContent) targetContent.classList.add('active');
+      });
+    });
+
+    // ── Elements & State ─────────────────────────────────────────────────────
     const statusDot = document.getElementById('statusDot');
     const statusText = document.getElementById('statusText');
+    const hwDot = document.getElementById('hwDot');
+    const hwStatusText = document.getElementById('hwStatusText');
     const stickCanvas = document.getElementById('stickCanvas');
     const stickCtx = stickCanvas.getContext('2d');
     const stickCoords = document.getElementById('stickCoords');
@@ -570,14 +976,44 @@
     const dwellPercent = document.getElementById('dwellPercent');
     const typedText = document.getElementById('typedText');
     const predictionBar = document.getElementById('predictionBar');
+    const phraseDrawer = document.getElementById('phraseDrawer');
+    const togglePhrasesBtn = document.getElementById('togglePhrasesBtn');
     const virtualKeyboard = document.getElementById('virtualKeyboard');
     const recenterBtn = document.getElementById('recenterBtn');
 
     let ws = null;
     let currentPose = { yaw: 0, pitch: 0, roll: 0 };
     let currentDwellAction = 'left_click';
+    let OSK_DWELL_MS = 1500;
+    let OSK_DWELL_ENABLED = true;
 
-    // Standard OptiKey Layout
+    // ── OSK Dwell Configuration ──────────────────────────────────────────────
+    const oskDwellSlider = document.getElementById('oskDwellSlider');
+    const oskDwellLabel  = document.getElementById('oskDwellLabel');
+    const oskDwellToggle = document.getElementById('oskDwellToggle');
+    const oskDwellStatus = document.getElementById('oskDwellStatus');
+
+    oskDwellSlider.addEventListener('input', () => {
+      OSK_DWELL_MS = parseInt(oskDwellSlider.value);
+      oskDwellLabel.textContent = OSK_DWELL_MS + 'ms';
+      sendWS({ type: "update_setting", setting: "osk_dwell_ms", value: OSK_DWELL_MS });
+    });
+
+    oskDwellToggle.addEventListener('click', () => {
+      OSK_DWELL_ENABLED = !OSK_DWELL_ENABLED;
+      oskDwellToggle.textContent = OSK_DWELL_ENABLED ? 'ON' : 'OFF';
+      oskDwellToggle.style.color = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
+      oskDwellToggle.style.borderColor = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
+      oskDwellStatus.textContent = OSK_DWELL_ENABLED ? 'Dwell-to-Type Active' : 'Dwell OFF – Click Only';
+      oskDwellStatus.style.color = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
+    });
+
+    togglePhrasesBtn.addEventListener('click', () => {
+      const isHidden = phraseDrawer.style.display === 'none';
+      phraseDrawer.style.display = isHidden ? 'flex' : 'none';
+    });
+
+    // ── Standard OptiKey Layout ──────────────────────────────────────────────
     const LAYOUT = [
       [
         {label: "1"}, {label: "2"}, {label: "3"}, {label: "4"}, {label: "5"},
@@ -605,29 +1041,6 @@
       ]
     ];
 
-    // ── OSK Dwell Config ──────────────────────────────────────────────────────
-    let OSK_DWELL_MS = 1500;      // Default 1.5s — prevents accidental triggers
-    let OSK_DWELL_ENABLED = true; // Can toggle off for physical mouse users
-
-    const oskDwellSlider = document.getElementById('oskDwellSlider');
-    const oskDwellLabel  = document.getElementById('oskDwellLabel');
-    const oskDwellToggle = document.getElementById('oskDwellToggle');
-    const oskDwellStatus = document.getElementById('oskDwellStatus');
-
-    oskDwellSlider.addEventListener('input', () => {
-      OSK_DWELL_MS = parseInt(oskDwellSlider.value);
-      oskDwellLabel.textContent = OSK_DWELL_MS + 'ms';
-    });
-
-    oskDwellToggle.addEventListener('click', () => {
-      OSK_DWELL_ENABLED = !OSK_DWELL_ENABLED;
-      oskDwellToggle.textContent = OSK_DWELL_ENABLED ? 'ON' : 'OFF';
-      oskDwellToggle.style.color = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
-      oskDwellToggle.style.borderColor = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
-      oskDwellStatus.textContent = OSK_DWELL_ENABLED ? 'Dwell-to-Type Active' : 'Dwell OFF – Click Only';
-      oskDwellStatus.style.color = OSK_DWELL_ENABLED ? 'var(--accent)' : '#f87171';
-    });
-
     function renderKeyboard() {
       virtualKeyboard.innerHTML = '';
       LAYOUT.forEach(row => {
@@ -649,27 +1062,23 @@
           keyEl.appendChild(textEl);
           keyEl.appendChild(fillEl);
 
-          // Click trigger (physical click or double-blink left click)
           keyEl.addEventListener('click', () => {
             sendWS({ type: "osk_key", key: key.label });
           });
 
-          // ── Dwell-hover on OSK keys — velocity-aware, stability-gated ────────
-          let hoverTimer   = null;
-          let startTime    = 0;
-          let hasActuated  = false;
-          // Velocity / stability tracking
+          // Velocity and stability gated hover
+          let hoverTimer = null;
           let enterX = 0, enterY = 0;
           let stableStart = 0;
           let lastMoveTime = 0;
-          const STABILITY_WAIT_MS = 200; // cursor must be stable 200ms before dwell counts
-          const DRIFT_PX          = 8;   // px cursor can drift within key before resetting
+          let hasActuated = false;
+          const STABILITY_WAIT_MS = 200;
+          const DRIFT_PX = 8;
 
           keyEl.addEventListener('mousemove', (ev) => {
             const dx = ev.clientX - enterX;
             const dy = ev.clientY - enterY;
             if (Math.hypot(dx, dy) > DRIFT_PX) {
-              // Cursor moved — reset stability clock & progress bar
               enterX = ev.clientX;
               enterY = ev.clientY;
               stableStart = performance.now();
@@ -694,9 +1103,7 @@
             hoverTimer = setInterval(() => {
               if (hasActuated) return;
               const now = performance.now();
-              const timeSinceMove = now - lastMoveTime;
-              // Don't start counting until cursor has been stable for STABILITY_WAIT_MS
-              if (timeSinceMove < STABILITY_WAIT_MS) {
+              if ((now - lastMoveTime) < STABILITY_WAIT_MS) {
                 fillEl.style.height = '0%';
                 return;
               }
@@ -715,10 +1122,7 @@
           });
 
           keyEl.addEventListener('mouseleave', () => {
-            if (hoverTimer) {
-              clearInterval(hoverTimer);
-              hoverTimer = null;
-            }
+            if (hoverTimer) { clearInterval(hoverTimer); hoverTimer = null; }
             fillEl.style.height = '0%';
             hasActuated = false;
             sendWS({ type: "osk_hover", key: null });
@@ -733,13 +1137,13 @@
 
     renderKeyboard();
 
+    // ── Head Tracking Canvas ─────────────────────────────────────────────────
     function drawStick(x, y) {
       const cx = stickCanvas.width / 2;
       const cy = stickCanvas.height / 2;
       const r = cx - 12;
 
       stickCtx.clearRect(0, 0, stickCanvas.width, stickCanvas.height);
-
       stickCtx.strokeStyle = '#1e293b';
       stickCtx.lineWidth = 2;
       stickCtx.beginPath();
@@ -759,7 +1163,6 @@
       stickCtx.arc(px, py, 12, 0, Math.PI * 2);
       stickCtx.fill();
     }
-
     drawStick(0, 0);
 
     function sendWS(obj) {
@@ -788,12 +1191,161 @@
       }
     });
 
+    // ── Voice Commands Wiring ────────────────────────────────────────────────
+    const toggleVoiceMicBtn = document.getElementById('toggleVoiceMicBtn');
+    const voiceStatusBadge = document.getElementById('voiceStatusBadge');
+    const voiceBackendLabel = document.getElementById('voiceBackendLabel');
+    const voiceLastCmd = document.getElementById('voiceLastCmd');
+    const voiceFeedbackText = document.getElementById('voiceFeedbackText');
+    const manualVoiceInput = document.getElementById('manualVoiceInput');
+    const sendManualVoiceBtn = document.getElementById('sendManualVoiceBtn');
+    const commandTableBody = document.getElementById('commandTableBody');
+
+    sendManualVoiceBtn.addEventListener('click', () => {
+      const text = manualVoiceInput.value.trim();
+      if (text) {
+        sendWS({ type: "voice_command", text: text });
+        manualVoiceInput.value = "";
+      }
+    });
+
+    manualVoiceInput.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') sendManualVoiceBtn.click();
+    });
+
+    toggleVoiceMicBtn.addEventListener('click', () => {
+      sendWS({ type: "voice_toggle" });
+    });
+
+    // Browser WebSpeech API Fallback (runs voice recognition directly in browser)
+    let recognition = null;
+    if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
+      const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
+      recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onresult = (event) => {
+        const last = event.results.length - 1;
+        const text = event.results[last][0].transcript.trim();
+        if (text) {
+          sendWS({ type: "voice_command", text: text });
+        }
+      };
+
+      recognition.onerror = (e) => {
+        console.warn("WebSpeech recognition error:", e);
+      };
+    }
+
+    // Fetch and populate Command Catalog table
+    fetch('/api/commands').then(res => res.json()).then(data => {
+      commandTableBody.innerHTML = '';
+      for (const [category, cmds] of Object.entries(data)) {
+        cmds.forEach(item => {
+          const row = document.createElement('tr');
+          row.innerHTML = `
+            <td><span style="color:var(--accent); font-weight:600;">${category}</span></td>
+            <td><b>"${item.command}"</b></td>
+            <td style="color:var(--muted);">${item.description}</td>
+            <td><button class="cmd-run-btn" data-cmd="${item.command}">Run</button></td>
+          `;
+          row.querySelector('.cmd-run-btn').addEventListener('click', () => {
+            sendWS({ type: "voice_command", text: item.command });
+          });
+          commandTableBody.appendChild(row);
+        });
+      }
+    }).catch(e => console.error(e));
+
+    // ── Screen Understanding Wiring ──────────────────────────────────────────
+    const btnReadScreen = document.getElementById('btnReadScreen');
+    const btnExplainDialog = document.getElementById('btnExplainDialog');
+    const btnFindElement = document.getElementById('btnFindElement');
+    const findElementInput = document.getElementById('findElementInput');
+    const screenAnalysisBox = document.getElementById('screenAnalysisBox');
+
+    btnReadScreen.addEventListener('click', () => {
+      screenAnalysisBox.textContent = "Inspecting foreground window and reading accessible screen text...";
+      sendWS({ type: "screen_read" });
+    });
+
+    btnExplainDialog.addEventListener('click', () => {
+      screenAnalysisBox.textContent = "Analyzing active dialog, buttons, and error messages...";
+      sendWS({ type: "screen_explain" });
+    });
+
+    btnFindElement.addEventListener('click', () => {
+      const query = findElementInput.value.trim();
+      if (query) {
+        screenAnalysisBox.textContent = `Locating '${query}' on screen...`;
+        sendWS({ type: "screen_find", query: query });
+      }
+    });
+
+    // ── Guardian Wiring ──────────────────────────────────────────────────────
+    const btnEmergencyStop = document.getElementById('btnEmergencyStop');
+    const guardianHwStatus = document.getElementById('guardianHwStatus');
+    const guardianHwFreshness = document.getElementById('guardianHwFreshness');
+    const guardianCamStatus = document.getElementById('guardianCamStatus');
+    const guardianCamTracking = document.getElementById('guardianCamTracking');
+    const guardianCamFps = document.getElementById('guardianCamFps');
+    const guardianVoiceStatus = document.getElementById('guardianVoiceStatus');
+    const guardianLogBox = document.getElementById('guardianLogBox');
+
+    btnEmergencyStop.addEventListener('click', () => {
+      sendWS({ type: "emergency_stop" });
+    });
+
+    // ── Adaptive Personalization Wiring ──────────────────────────────────────
+    const sliderAngleX = document.getElementById('sliderAngleX');
+    const sliderAngleY = document.getElementById('sliderAngleY');
+    const sliderDeadzone = document.getElementById('sliderDeadzone');
+    const sliderDwell = document.getElementById('sliderDwell');
+    const lblAngleX = document.getElementById('lblAngleX');
+    const lblAngleY = document.getElementById('lblAngleY');
+    const lblDeadzone = document.getElementById('lblDeadzone');
+    const lblDwell = document.getElementById('lblDwell');
+    const recommendationsList = document.getElementById('recommendationsList');
+    const btnResetProfile = document.getElementById('btnResetProfile');
+
+    sliderAngleX.addEventListener('input', () => {
+      lblAngleX.textContent = sliderAngleX.value + '°';
+      sendWS({ type: "update_setting", setting: "angle_range_x", value: parseFloat(sliderAngleX.value) });
+    });
+
+    sliderAngleY.addEventListener('input', () => {
+      lblAngleY.textContent = sliderAngleY.value + '°';
+      sendWS({ type: "update_setting", setting: "angle_range_y", value: parseFloat(sliderAngleY.value) });
+    });
+
+    sliderDeadzone.addEventListener('input', () => {
+      lblDeadzone.textContent = sliderDeadzone.value + '°';
+      sendWS({ type: "update_setting", setting: "deadzone_deg", value: parseFloat(sliderDeadzone.value) });
+    });
+
+    sliderDwell.addEventListener('input', () => {
+      lblDwell.textContent = sliderDwell.value + 'ms';
+      sendWS({ type: "update_setting", setting: "dwell_time_ms", value: parseFloat(sliderDwell.value) });
+    });
+
+    btnResetProfile.addEventListener('click', () => {
+      if (confirm("Reset accessibility profile back to factory defaults?")) {
+        sendWS({ type: "reset_profile" });
+      }
+    });
+
+    // ── WebSocket Connection & State Sync ────────────────────────────────────
     function connect() {
       ws = new WebSocket(`ws://${window.location.host}/ws`);
 
       ws.onopen = () => {
         statusDot.classList.add('connected');
         statusText.textContent = 'Connected (Live)';
+        if (recognition) {
+          try { recognition.start(); } catch(e){}
+        }
       };
 
       ws.onclose = () => {
@@ -805,13 +1357,13 @@
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
 
-        // Stick
+        // Analog Stick
         if (data.stick) {
           drawStick(data.stick.x, data.stick.y);
           stickCoords.textContent = `X: ${data.stick.x.toFixed(2)} | Y: ${data.stick.y.toFixed(2)}`;
         }
 
-        // Pose
+        // Head Pose
         if (data.pose) {
           currentPose = data.pose;
           yawVal.textContent = `${data.pose.yaw.toFixed(1)}°`;
@@ -823,13 +1375,7 @@
           rollBar.style.width = `${Math.min(100, Math.abs(data.pose.roll) * 3)}%`;
         }
 
-        // Double-blink click visual trigger
-        if (data.blink_click) {
-          statusDot.style.boxShadow = '0 0 16px #22c55e';
-          setTimeout(() => { statusDot.style.boxShadow = ''; }, 300);
-        }
-
-        // Real-time Blink Telemetry Badge
+        // Double-blink Telemetry
         if (data.blink) {
           const bEl = document.getElementById('blinkBadge');
           if (bEl) {
@@ -850,24 +1396,18 @@
           }
         }
 
-        // Tracky Mouse Dwell progress
+        // Dwell click progress
         if (data.dwell) {
           const prog = data.dwell.progress || 0.0;
           const deg = Math.round(prog * 360);
           dwellCircle.style.setProperty('--dwell-deg', `${deg}deg`);
           dwellPercent.textContent = `${Math.round(prog * 100)}%`;
-
-          if (data.dwell.state === 'triggered' && headTarget) {
-            headTarget.click();
-            headTarget.classList.remove('head-hovered');
-            headTarget = null;
-          }
         }
 
         // OptiKey OSK state
         if (data.osk) {
           if (data.osk.text !== undefined) {
-            typedText.textContent = data.osk.text || "Type with head dwelling or clicks...";
+            typedText.textContent = data.osk.text || "Type with head dwelling, double-blink, or clicks...";
           }
 
           if (data.osk.predictions) {
@@ -882,51 +1422,112 @@
               predictionBar.appendChild(chip);
             });
           }
+
+          if (data.osk.quick_phrases) {
+            phraseDrawer.innerHTML = '<div style="width:100%; font-size:0.75rem; color:var(--muted); margin-bottom:0.25rem;">Frequently Used Phrases (Click or Dwell to send):</div>';
+            data.osk.quick_phrases.forEach(phrase => {
+              const chip = document.createElement('div');
+              chip.className = 'phrase-chip';
+              chip.textContent = phrase;
+              chip.addEventListener('click', () => {
+                sendWS({ type: "osk_quick_phrase", phrase: phrase });
+              });
+              phraseDrawer.appendChild(chip);
+            });
+          }
         }
 
-        // Gamepad buttons
+        // Voice Engine Telemetry
+        if (data.voice) {
+          voiceBackendLabel.textContent = data.voice.backend || "Ready";
+          voiceStatusBadge.textContent = data.voice.status === 'listening' ? 'Listening & Ready' : (data.voice.status_detail || data.voice.status);
+          voiceStatusBadge.style.color = data.voice.status === 'listening' ? 'var(--success)' : 'var(--accent)';
+          if (data.voice.last_spoken) {
+            voiceLastCmd.textContent = `"${data.voice.last_spoken}"`;
+            voiceFeedbackText.textContent = data.voice.last_feedback || "-";
+          }
+        }
+
+        // Guardian Telemetry
+        if (data.guardian) {
+          const g = data.guardian;
+          if (g.hardware) {
+            guardianHwStatus.textContent = g.hardware.connected ? "Connected (Primary)" : "Disconnected";
+            guardianHwStatus.style.color = g.hardware.connected ? "var(--success)" : "#f87171";
+            guardianHwFreshness.textContent = g.hardware.freshness_sec < 900 ? `${g.hardware.freshness_sec}s ago` : "No Signal";
+            hwDot.className = g.hardware.connected ? "dot connected" : "dot";
+            hwStatusText.textContent = g.hardware.connected ? "Wearable Primary" : "Webcam Fallback Active";
+          }
+
+          if (g.webcam_fallback) {
+            guardianCamFps.textContent = g.webcam_fallback.fps;
+            guardianCamTracking.textContent = g.webcam_fallback.tracking_stable ? "Stable" : "Searching";
+            guardianCamStatus.textContent = g.webcam_fallback.active ? "Active & Tracking" : "Ready in Standby";
+          }
+
+          if (g.safety && g.safety.last_incident && g.safety.last_incident !== "None") {
+            const logEntry = document.createElement('div');
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}]: ${g.safety.last_incident}`;
+            if (guardianLogBox.children.length > 20) guardianLogBox.removeChild(guardianLogBox.firstChild);
+            guardianLogBox.appendChild(logEntry);
+          }
+        }
+
+        // Screen Understanding Output
+        if (data.screen && data.screen.last_result) {
+          screenAnalysisBox.textContent = data.screen.last_result;
+        }
+
+        // Adaptive Personalization Profile & Recommendations
+        if (data.personalization) {
+          const p = data.personalization.profile;
+          if (p) {
+            lblAngleX.textContent = p.angle_range_x + '°';
+            sliderAngleX.value = p.angle_range_x;
+            lblAngleY.textContent = p.angle_range_y + '°';
+            sliderAngleY.value = p.angle_range_y;
+            lblDeadzone.textContent = p.deadzone_deg + '°';
+            sliderDeadzone.value = p.deadzone_deg;
+            lblDwell.textContent = p.dwell_time_ms + 'ms';
+            sliderDwell.value = p.dwell_time_ms;
+          }
+
+          const recs = data.personalization.recommendations || [];
+          if (recs.length > 0) {
+            recommendationsList.innerHTML = '';
+            recs.forEach(rec => {
+              const card = document.createElement('div');
+              card.className = 'recommendation-card';
+              card.innerHTML = `
+                <div style="font-weight:700; color:var(--accent); font-size:0.95rem;">💡 ${rec.title}</div>
+                <div style="font-size:0.85rem; color:#cbd5e1; margin-top:0.3rem;">${rec.reason}</div>
+                <div style="font-size:0.8rem; color:var(--muted); margin-top:0.3rem;">
+                  Current: <b>${rec.current}</b> ➔ Suggested: <b style="color:var(--success);">${rec.recommended}</b>
+                </div>
+                <div class="rec-actions">
+                  <button class="btn-approve" data-id="${rec.id}">Approve Adjustment</button>
+                  <button class="btn-dismiss" data-id="${rec.id}">Dismiss</button>
+                </div>
+              `;
+              card.querySelector('.btn-approve').addEventListener('click', () => {
+                sendWS({ type: "apply_recommendation", id: rec.id });
+              });
+              card.querySelector('.btn-dismiss').addEventListener('click', () => {
+                sendWS({ type: "dismiss_recommendation", id: rec.id });
+              });
+              recommendationsList.appendChild(card);
+            });
+          } else {
+            recommendationsList.innerHTML = '<div style="font-size:0.85rem; color:var(--muted); font-style:italic;">No pending recommendations at this time. Current settings match your motor patterns.</div>';
+          }
+        }
+
+        // Gamepad Buttons
         if (data.pressed) {
           document.querySelectorAll('.pill').forEach(pill => {
             const k = pill.getAttribute('data-key');
             pill.classList.toggle('active', data.pressed.includes(k));
           });
-        }
-
-        if (data.blendshapes) {
-          blendshapeList.innerHTML = '';
-          for (const [k, v] of Object.entries(data.blendshapes)) {
-            const row = document.createElement('div');
-            row.className = 'meter-row';
-            row.innerHTML = `
-              <span class="meter-label">${k}</span>
-              <div class="meter-bar"><div class="meter-fill" style="width: ${Math.round(v * 100)}%"></div></div>
-              <span class="meter-value">${v.toFixed(2)}</span>
-            `;
-            blendshapeList.appendChild(row);
-          }
-        }
-
-        if (data.omniband) {
-          const ob = data.omniband;
-          document.getElementById('omnibandCard').style.display = '';
-          document.getElementById('obMode').textContent = ob.mode_name || ('M' + ob.mode);
-          document.getElementById('obLink').textContent = ob.link || '-';
-          document.getElementById('obFsm').textContent = ob.fsm || '-';
-          document.getElementById('obGes').textContent = ob.last_ges || '-';
-          const envList = document.getElementById('obEnvList');
-          envList.innerHTML = '';
-          (ob.env || []).forEach((v, i) => {
-            const row = document.createElement('div');
-            row.className = 'meter-row';
-            row.innerHTML = `
-              <span class="meter-label">CH${i + 1}</span>
-              <div class="meter-bar"><div class="meter-fill" style="width: ${Math.min(100, v / 20)}%"></div></div>
-              <span class="meter-value">${Math.round(v)}</span>
-            `;
-            envList.appendChild(row);
-          });
-          document.getElementById('obStats').textContent =
-            `ges=${ob.ges || 0} evt=${ob.evts || 0} rel=${ob.releases || 0} sos=${ob.sos || 0} estop=${ob.estops || 0}`;
         }
       };
     }

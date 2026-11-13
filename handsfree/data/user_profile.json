@@ -1,0 +1,16 @@
+{
+  "angle_range_x": 20.0,
+  "angle_range_y": 15.0,
+  "deadzone_deg": 2.5,
+  "dwell_time_ms": 1800.0,
+  "blink_sensitivity": 0.5,
+  "speech_rate": 150,
+  "osk_dwell_ms": 1500.0,
+  "command_counts": {
+    "open google": 1
+  },
+  "frequent_words": {},
+  "dwell_misses": 15,
+  "blink_triggers": 0,
+  "session_count": 5
+}

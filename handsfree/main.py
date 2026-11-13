@@ -85,10 +85,24 @@ class HandsfreeEngine:
                 auto_calibrate=True,
                 enable_blink=args.enable_blink_click,
             )
+
+            def on_assistive_cmd(action: str, payload: Any = None):
+                if action == "pause_tracking":
+                    self.state_machine.transition_to(SystemState.PAUSED)
+                elif action == "resume_tracking":
+                    self.state_machine.transition_to(SystemState.ACTIVE)
+                elif action == "emergency_stop":
+                    self.gateway.release_all()
+                elif action == "exit_app":
+                    self.stop()
+
             self.dashboard = DashboardServer(
                 host=args.dashboard_host,
                 port=args.dashboard_port,
                 cursor_tracker=tracker,
+                gateway=self.gateway,
+                watchdog=self.watchdog,
+                on_assistive_cmd=on_assistive_cmd,
             )
 
         # 7. Adapters
@@ -108,6 +122,8 @@ class HandsfreeEngine:
                 if self.dashboard:
                     self.dashboard.update_telemetry("state", "active")
             self.watchdog.beat()
+            if self.dashboard and hasattr(self.dashboard, "guardian"):
+                self.dashboard.guardian.record_webcam_frame(has_face=True)
 
         if self.args.replay:
             logger.info(f"Replay mode active with: {self.args.replay}")

@@ -1,4 +1,4 @@
-"""Interactive FastAPI and WebSocket telemetry & accessible On-Screen Keyboard server."""
+"""Interactive FastAPI and WebSocket telemetry & accessible AI Assistant server."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from pathlib import Path
 import sys
 import threading
 import time
-from typing import Any, Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Set
 
 # Ensure project root (c:\Unbound) is on sys.path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
@@ -18,13 +18,18 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from handsfree.core.osk_engine import OnScreenKeyboardEngine, KEYBOARD_LAYOUT
 from handsfree.core.cursor_tracker import CursorTracker, DwellAction
+from handsfree.core.command_router import CommandRouter
+from handsfree.core.voice_engine import VoiceCommandEngine
+from handsfree.core.screen_understanding import ScreenUnderstandingService
+from handsfree.core.guardian import SoftwareGuardian
+from handsfree.core.personalization import AdaptivePersonalizationService
 
 logger = logging.getLogger("handsfree.dashboard")
 
 try:
     from fastapi import FastAPI, WebSocket, WebSocketDisconnect
     from fastapi.staticfiles import StaticFiles
-    from fastapi.responses import FileResponse
+    from fastapi.responses import FileResponse, JSONResponse
     import uvicorn
     HAS_FASTAPI = True
 except ImportError:
@@ -32,9 +37,10 @@ except ImportError:
 
 
 class DashboardServer:
-    """Provides real-time telemetry over WebSockets to a local browser HUD,
+    """Provides real-time telemetry over WebSockets to local browser HUD,
 
-    including OptiKey On-Screen Keyboard and Tracky-Mouse dwell clicking.
+    including OptiKey Smart OSK, AI Voice Commands, Screen Understanding,
+    Software Guardian Auto-Recovery, and Adaptive Personalization.
     """
 
     def __init__(
@@ -42,18 +48,54 @@ class DashboardServer:
         host: str = "127.0.0.1",
         port: int = 8080,
         cursor_tracker: Optional[CursorTracker] = None,
+        gateway: Optional[Any] = None,
+        watchdog: Optional[Any] = None,
+        on_assistive_cmd: Optional[Callable[[str, Any], None]] = None,
     ):
         self.host = host
         self.port = port
         self.active_connections: Set[WebSocket] = set()
+        self.gateway = gateway
+        self.watchdog = watchdog
+        self.on_assistive_cmd = on_assistive_cmd
 
-        # Shared OptiKey engine & Cursor tracker
+        # 1. Smart Accessible Keyboard
         self.osk = OnScreenKeyboardEngine(
             on_text_updated=self._on_osk_text_changed,
             on_key_actuated=self._on_osk_key_actuated,
         )
+
+        # 2. Cursor Tracker
         self.cursor_tracker = cursor_tracker or CursorTracker(auto_calibrate=True)
 
+        # 3. AI Adaptive Personalization
+        self.personalization = AdaptivePersonalizationService()
+
+        # 4. AI Screen Understanding
+        self.screen_assistant = ScreenUnderstandingService(tts_speaker=self.osk.speak_text)
+
+        # 5. Centralized Command Router
+        self.command_router = CommandRouter(
+            on_assistive_action=self._handle_assistive_action,
+            tts_speaker=self.osk.speak_text,
+        )
+
+        # 6. AI Voice Command Engine
+        self.voice_engine = VoiceCommandEngine(
+            command_router=self.command_router,
+            on_command_recognized=self._on_voice_command_recognized,
+            on_status_changed=self._on_voice_status_changed,
+        )
+
+        # 7. AI Software Guardian & Auto-Recovery
+        self.guardian = SoftwareGuardian(
+            gateway_ref=self.gateway,
+            watchdog_ref=self.watchdog,
+            tts_speaker=self.osk.speak_text,
+            on_status_update=self._on_guardian_status_update,
+        )
+
+        # Shared Telemetry State
         self.latest_telemetry: Dict[str, Any] = {
             "timestamp": time.time(),
             "state": "active",
@@ -66,7 +108,13 @@ class DashboardServer:
                 "predictions": self.osk.predictions,
                 "active_key": None,
                 "dwell_progress": 0.0,
+                "quick_phrases": self.osk.get_quick_phrases(),
+                "personal_words": self.osk.smart_predictor.personal_words,
             },
+            "voice": self.voice_engine.get_telemetry_dict(),
+            "guardian": self.guardian.get_telemetry_dict(),
+            "personalization": self.personalization.get_telemetry_dict(),
+            "screen": {"last_result": "", "element_highlight": None},
             "blendshapes": {},
             "pressed": [],
             "audio": {"pop": False, "speech": False},
@@ -85,10 +133,56 @@ class DashboardServer:
             "predictions": self.osk.predictions,
             "active_key": self.osk.active_key,
             "dwell_progress": self.osk.dwell_progress,
+            "quick_phrases": self.osk.get_quick_phrases(),
+            "personal_words": self.osk.smart_predictor.personal_words,
         })
 
     def _on_osk_key_actuated(self, key: str) -> None:
         logger.info(f"Dashboard OSK Actuated: {key}")
+        self.personalization.record_dwell_success()
+
+    def _on_voice_command_recognized(self, text: str, success: bool, feedback: str) -> None:
+        self.personalization.record_command(text)
+        self.update_telemetry("voice", {
+            **self.voice_engine.get_telemetry_dict(),
+            "last_spoken": text,
+            "last_success": success,
+            "last_feedback": feedback,
+        })
+
+    def _on_voice_status_changed(self, status: str, detail: str) -> None:
+        self.update_telemetry("voice", self.voice_engine.get_telemetry_dict())
+
+    def _on_guardian_status_update(self, status_dict: Dict[str, Any]) -> None:
+        self.update_telemetry("guardian", status_dict)
+
+    def _handle_assistive_action(self, action_name: str, payload: Any = None) -> None:
+        """Dispatches assistive commands from voice/intent to subsystem handlers."""
+        logger.info(f"Assistive action requested: {action_name}")
+        if action_name == "show_keyboard":
+            self.update_telemetry("osk_visibility", True)
+        elif action_name == "hide_keyboard":
+            self.update_telemetry("osk_visibility", False)
+        elif action_name == "recenter_cursor":
+            self.cursor_tracker.recenter()
+        elif action_name == "emergency_stop":
+            self.guardian.trigger_safe_stop("Voice Emergency Stop")
+        elif action_name == "read_screen":
+            res = self.screen_assistant.read_screen()
+            self.update_telemetry("screen", {"last_result": res, "element_highlight": None})
+        elif action_name == "activate_fallback":
+            self.guardian.active_mode = "webcam_fallback"
+            self.update_telemetry("guardian", self.guardian.get_telemetry_dict())
+        elif action_name == "status":
+            g = self.guardian.get_telemetry_dict()
+            msg = f"Unbound Handsfree active in {g['active_mode']} mode. Tracking is stable."
+            self.osk.speak_text(msg)
+
+        if self.on_assistive_cmd:
+            try:
+                self.on_assistive_cmd(action_name, payload)
+            except Exception as e:
+                logger.error(f"Error in on_assistive_cmd handler: {e}")
 
     def _setup_app(self) -> None:
         self.app = FastAPI(title="Handsfree HUD Dashboard", docs_url=None, redoc_url=None)
@@ -102,15 +196,25 @@ class DashboardServer:
         async def get_arena():
             return FileResponse(static_dir / "arena" / "index.html")
 
+        @self.app.get("/api/commands")
+        async def get_commands():
+            return JSONResponse(self.command_router.get_command_catalog())
+
+        @self.app.get("/api/personalization")
+        async def get_personalization():
+            return JSONResponse(self.personalization.get_telemetry_dict())
+
+        @self.app.get("/api/quick-phrases")
+        async def get_quick_phrases():
+            return JSONResponse(self.osk.get_quick_phrases())
+
         @self.app.post("/api/telemetry")
         async def post_telemetry(payload: Dict[str, Any]):
-            # Updates internal telemetry buffer for arena stream
             self.update_telemetry("arena_telemetry", payload)
             return {"status": "ok"}
 
         @self.app.get("/api/keyboard-layout")
         async def get_layout():
-            # Return serialized layout definition
             rows = []
             for row in KEYBOARD_LAYOUT:
                 rows.append([{"label": k.label, "type": k.action_type, "width": k.width} for k in row])
@@ -121,7 +225,6 @@ class DashboardServer:
             await websocket.accept()
             self.active_connections.add(websocket)
             try:
-                # Send immediate state on connection
                 await websocket.send_text(json.dumps(self.latest_telemetry))
                 while True:
                     raw_msg = await websocket.receive_text()
@@ -141,6 +244,7 @@ class DashboardServer:
     def _handle_client_message(self, msg: Dict[str, Any]) -> None:
         mtype = msg.get("type")
 
+        # OSK handlers
         if mtype == "osk_key":
             key = msg.get("key", "")
             self.osk.actuate_key(key)
@@ -157,8 +261,103 @@ class DashboardServer:
                 "predictions": self.osk.predictions,
                 "active_key": self.osk.active_key,
                 "dwell_progress": prog,
+                "quick_phrases": self.osk.get_quick_phrases(),
+                "personal_words": self.osk.smart_predictor.personal_words,
             })
 
+        elif mtype == "osk_quick_phrase":
+            phrase = msg.get("phrase", "")
+            self.osk.apply_quick_phrase(phrase)
+
+        elif mtype == "osk_add_word":
+            word = msg.get("word", "")
+            self.osk.add_personal_word(word)
+            self.update_telemetry("osk", {
+                "text": self.osk.text_buffer,
+                "predictions": self.osk.predictions,
+                "active_key": self.osk.active_key,
+                "dwell_progress": 0.0,
+                "quick_phrases": self.osk.get_quick_phrases(),
+                "personal_words": self.osk.smart_predictor.personal_words,
+            })
+
+        elif mtype == "osk_remove_word":
+            word = msg.get("word", "")
+            self.osk.remove_personal_word(word)
+            self.update_telemetry("osk", {
+                "text": self.osk.text_buffer,
+                "predictions": self.osk.predictions,
+                "active_key": self.osk.active_key,
+                "dwell_progress": 0.0,
+                "quick_phrases": self.osk.get_quick_phrases(),
+                "personal_words": self.osk.smart_predictor.personal_words,
+            })
+
+        # Voice handlers
+        elif mtype == "voice_command":
+            spoken_text = msg.get("text", "")
+            self.voice_engine.submit_spoken_text(spoken_text)
+
+        elif mtype == "voice_toggle":
+            if self.voice_engine.is_running:
+                self.voice_engine.stop()
+            else:
+                self.voice_engine.start()
+            self.update_telemetry("voice", self.voice_engine.get_telemetry_dict())
+
+        # Screen Understanding handlers
+        elif mtype == "screen_read":
+            result = self.screen_assistant.read_screen()
+            self.update_telemetry("screen", {"last_result": result, "element_highlight": None})
+
+        elif mtype == "screen_find":
+            query = msg.get("query", "")
+            found_elem = self.screen_assistant.find_element(query)
+            highlight = None
+            if found_elem:
+                highlight = {
+                    "name": found_elem.name,
+                    "x": found_elem.x,
+                    "y": found_elem.y,
+                    "w": found_elem.width,
+                    "h": found_elem.height,
+                }
+            self.update_telemetry("screen", {
+                "last_result": f"Located '{query}'" if found_elem else f"'{query}' not found",
+                "element_highlight": highlight,
+            })
+
+        elif mtype == "screen_explain":
+            result = self.screen_assistant.explain_dialog()
+            self.update_telemetry("screen", {"last_result": result, "element_highlight": None})
+
+        # Guardian handlers
+        elif mtype == "emergency_stop":
+            self.guardian.trigger_safe_stop("User Emergency Button Click")
+            self.update_telemetry("guardian", self.guardian.get_telemetry_dict())
+
+        # Personalization handlers
+        elif mtype == "apply_recommendation":
+            rec_id = msg.get("id", "")
+            self.personalization.apply_recommendation(rec_id)
+            self.update_telemetry("personalization", self.personalization.get_telemetry_dict())
+
+        elif mtype == "dismiss_recommendation":
+            rec_id = msg.get("id", "")
+            self.personalization.dismiss_recommendation(rec_id)
+            self.update_telemetry("personalization", self.personalization.get_telemetry_dict())
+
+        elif mtype == "update_setting":
+            setting = msg.get("setting", "")
+            val = msg.get("value")
+            self.personalization.update_setting(setting, val)
+            self.update_telemetry("personalization", self.personalization.get_telemetry_dict())
+
+        elif mtype == "reset_profile":
+            self.personalization.reset_defaults()
+            self.update_telemetry("personalization", self.personalization.get_telemetry_dict())
+
+        # Dwell & Navigation
         elif mtype == "dwell_action":
             action_name = msg.get("action", "left_click")
             try:
@@ -202,6 +401,10 @@ class DashboardServer:
             logger.warning("FastAPI or Uvicorn not installed. Dashboard server disabled.")
             return
 
+        # Start background voice engine and guardian
+        self.voice_engine.start()
+        self.guardian.start()
+
         def run_server():
             self._loop = asyncio.new_event_loop()
             asyncio.set_event_loop(self._loop)
@@ -214,20 +417,9 @@ class DashboardServer:
         logger.info(f"Dashboard server running at http://{self.host}:{self.port}")
 
     def stop(self) -> None:
-        """Stops the background event loop and WebSocket server."""
+        """Stops the background event loop, voice engine, guardian, and WebSocket server."""
+        self.voice_engine.stop()
+        self.guardian.stop()
         if self._loop and self._loop.is_running():
             self._loop.call_soon_threadsafe(self._loop.stop)
         logger.info("Dashboard server stopped.")
-
-
-if __name__ == "__main__":
-    logging.basicConfig(level=logging.INFO)
-    srv = DashboardServer(port=8080)
-    srv.start()
-    print("Handsfree HUD Dashboard live at http://127.0.0.1:8080/ (Press Ctrl+C to stop)")
-    try:
-        while True:
-            time.sleep(1)
-    except KeyboardInterrupt:
-        print("\nStopping...")
-        srv.stop()

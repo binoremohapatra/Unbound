@@ -29,6 +29,7 @@ from host.omniband.app.theme import (
     INDUSTRIAL_IVORY, WARM_GRAPHITE, FONT_MONO
 )
 from host.omniband.hardware.hardware_calibration import HardwareCalibrator
+from host.omniband.tracking.optical_calibration import OpticalCalibrator, OpticalCalibrationProfile
 
 
 class CalibrationView(QWidget):
@@ -37,17 +38,36 @@ class CalibrationView(QWidget):
     sig_start_guided_calib = Signal()
     sig_reset_calib = Signal()
     sig_apply_thresholds = Signal(list)  # 4 floats for oscilloscope sync
+    sig_optical_calib_complete = Signal(object)  # OpticalCalibrationProfile
 
-    def __init__(self, calibrator: Optional[HardwareCalibrator] = None, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        calibrator: Optional[HardwareCalibrator] = None,
+        optical_calibrator: Optional[OpticalCalibrator] = None,
+        parent: QWidget | None = None
+    ) -> None:
         super().__init__(parent)
         self.calibrator = calibrator or HardwareCalibrator()
+        self.optical_calibrator = optical_calibrator or OpticalCalibrator()
 
-        self._calib_step = 0  # 0: Idle, 1: Baseline, 2: CH1, 3: CH2, 4: CH3, 5: CH4
+        self._calib_step = 0  # 0: Idle, 1..5: Hardware steps
+        self._optical_step = 0  # 0: Idle, 1..4: Optical steps
         self._step_timer = QTimer(self)
         self._step_timer.timeout.connect(self._on_step_tick)
         self._samples_collector: List[List[float]] = []
         self._step_duration_s = 3.0
         self._step_start_t = 0.0
+
+        # Optical collector buffers
+        self._opt_bl_left: list[float] = []
+        self._opt_bl_right: list[float] = []
+        self._opt_bl_nose: list[tuple[float, float]] = []
+        self._opt_bl_dist: list[float] = []
+        self._opt_wink_l: list[float] = []
+        self._opt_comp_r: list[float] = []
+        self._opt_wink_r: list[float] = []
+        self._opt_comp_l: list[float] = []
+        self._opt_jaw: list[float] = []
 
         layout = QVBoxLayout(self)
         layout.setSpacing(12)
@@ -91,6 +111,11 @@ class CalibrationView(QWidget):
         self._btn_reset_calib.clicked.connect(self.reset_to_defaults)
         btn_row.addWidget(self._btn_reset_calib)
 
+        self._btn_start_optical = QPushButton("👁️ Calibrate Wink / Scroll / Zoom (15s Wizard)")
+        self._btn_start_optical.setStyleSheet(f"background-color: #00E5FF; color: #111; font-weight: bold; padding: 6px 12px;")
+        self._btn_start_optical.clicked.connect(self.start_optical_calibration)
+        btn_row.addWidget(self._btn_start_optical)
+
         cal_layout.addLayout(btn_row)
 
         self._progress = QProgressBar()
@@ -119,6 +144,11 @@ class CalibrationView(QWidget):
         self._lbl_crosstalk.setFont(QFont("Cascadia Code", 10))
         self._lbl_crosstalk.setStyleSheet(f"color: {WARM_GRAPHITE}; background: {SURFACE_2}; padding: 6px 10px; border-radius: 4px;")
         metrics_layout.addWidget(self._lbl_crosstalk, 2, 0, 1, 2)
+
+        self._lbl_optical_metrics = QLabel("Optical Thresholds: L-Wink: 0.18 (R-Floor: 0.22) | R-Wink: 0.18 (L-Floor: 0.22) | Neutral: (0.50, 0.45)")
+        self._lbl_optical_metrics.setFont(QFont("Cascadia Code", 10, QFont.Bold))
+        self._lbl_optical_metrics.setStyleSheet(f"color: #00E5FF; background: {SURFACE_2}; padding: 6px 10px; border-radius: 4px;")
+        metrics_layout.addWidget(self._lbl_optical_metrics, 3, 0, 1, 2)
 
         layout.addWidget(metrics_group)
 
@@ -150,9 +180,11 @@ class CalibrationView(QWidget):
 
     def reset_to_defaults(self) -> None:
         self.calibrator.reset_defaults()
+        self.optical_calibrator.reset_defaults()
         self._refresh_profile_display()
         self.sig_apply_thresholds.emit(self.calibrator.profile.thresholds)
-        self.append_log("Reset hardware calibration and gains to defaults.")
+        self.sig_optical_calib_complete.emit(self.optical_calibrator.profile)
+        self.append_log("Reset hardware and optical calibration and gains to defaults.")
 
     def _refresh_profile_display(self) -> None:
         p = self.calibrator.profile
@@ -168,11 +200,71 @@ class CalibrationView(QWidget):
         self._lbl_crosstalk.setText(
             f"Skull Cross-Talk Leakage C[Jaw CH4 -> Others]: CH1: {c4[0]:.2f} | CH2: {c4[1]:.2f} | CH3: {c4[2]:.2f} (Gate Active)"
         )
+        op = self.optical_calibrator.profile
+        self._lbl_optical_metrics.setText(
+            f"Optical: L-Wink: {op.left_wink_thresh:.2f} (R-Floor: {op.right_open_floor:.2f}) | "
+            f"R-Wink: {op.right_wink_thresh:.2f} (L-Floor: {op.left_open_floor:.2f}) | "
+            f"Neutral: ({op.neutral_cx:.2f}, {op.neutral_cy:.2f}) | MAR Thr: {op.jaw_click_thresh:.2f}"
+        )
 
     def feed_sample(self, raw_ch: List[float]) -> None:
         """Called whenever a physical raw sample arrives from BLE/USB during calibration."""
         if self._calib_step > 0:
             self._samples_collector.append(list(raw_ch[:4]))
+
+    def feed_optical_frame(
+        self,
+        left_ear: Optional[float],
+        right_ear: Optional[float],
+        mar: Optional[float],
+        nose_norm: Optional[tuple[float, float]],
+        eye_dist: Optional[float],
+    ) -> None:
+        """Feed live biometric frame metrics into the 15-second optical wizard."""
+        if self._optical_step == 0:
+            return
+
+        le = left_ear if left_ear is not None else 0.28
+        re = right_ear if right_ear is not None else 0.28
+        m = mar if mar is not None else 0.0
+        dist = eye_dist if eye_dist is not None else 0.12
+
+        if self._optical_step == 1:
+            self._opt_bl_left.append(le)
+            self._opt_bl_right.append(re)
+            if nose_norm is not None:
+                self._opt_bl_nose.append(nose_norm)
+            self._opt_bl_dist.append(dist)
+        elif self._optical_step == 2:
+            self._opt_wink_l.append(le)
+            self._opt_comp_r.append(re)
+        elif self._optical_step == 3:
+            self._opt_wink_r.append(re)
+            self._opt_comp_l.append(le)
+        elif self._optical_step == 4:
+            self._opt_jaw.append(m)
+
+    def start_optical_calibration(self) -> None:
+        """Launch the 15-second guided optical calibration wizard."""
+        self._calib_step = 0
+        self._optical_step = 1
+        self._opt_bl_left.clear()
+        self._opt_bl_right.clear()
+        self._opt_bl_nose.clear()
+        self._opt_bl_dist.clear()
+        self._opt_wink_l.clear()
+        self._opt_comp_r.clear()
+        self._opt_wink_r.clear()
+        self._opt_comp_l.clear()
+        self._opt_jaw.clear()
+
+        self._step_start_t = time.perf_counter()
+        self._progress.setRange(0, 4)
+        self._progress.setValue(1)
+        self._progress.setFormat("Optical Step 1/4: Open Eyes & Neutral Head (3s)")
+        self._cal_info.setText("OPTICAL STEP 1: Look directly at the camera with normal open eyes and neutral head pose (3s)...")
+        self.append_log("Starting 15s Guided Optical Calibration: Step 1 - Normal open eyes baseline.")
+        self._step_timer.start(100)
 
     def start_guided_calibration(self) -> None:
         self._calib_step = 1
@@ -188,6 +280,67 @@ class CalibrationView(QWidget):
         elapsed = time.perf_counter() - self._step_start_t
         rem = max(0.0, self._step_duration_s - elapsed)
 
+        # -------------------------------------------------------------
+        # Optical Calibration Wizard Steps
+        # -------------------------------------------------------------
+        if self._optical_step > 0:
+            if self._optical_step == 1:
+                self._cal_info.setText(f"OPTICAL STEP 1: Eyes open, neutral head... ({rem:.1f}s remaining)")
+                if rem <= 0.0:
+                    self.append_log("Optical Step 1 Complete: Open eyes baseline recorded.")
+                    self._optical_step = 2
+                    self._step_start_t = time.perf_counter()
+                    self._progress.setValue(2)
+                    self._progress.setFormat("Optical Step 2/4: Wink Left Eye (Scroll Pose)")
+                    self._cal_info.setText("OPTICAL STEP 2: Hold your LEFT eye closed firmly while keeping RIGHT eye open (3s)...")
+
+            elif self._optical_step == 2:
+                self._cal_info.setText(f"OPTICAL STEP 2: Wink LEFT eye (Scroll Clutch pose)... ({rem:.1f}s remaining)")
+                if rem <= 0.0:
+                    self.append_log("Optical Step 2 Complete: Left wink thresholds recorded.")
+                    self._optical_step = 3
+                    self._step_start_t = time.perf_counter()
+                    self._progress.setValue(3)
+                    self._progress.setFormat("Optical Step 3/4: Wink Right Eye (Zoom Pose)")
+                    self._cal_info.setText("OPTICAL STEP 3: Hold your RIGHT eye closed firmly while keeping LEFT eye open (3s)...")
+
+            elif self._optical_step == 3:
+                self._cal_info.setText(f"OPTICAL STEP 3: Wink RIGHT eye (Doctor Zoom pose)... ({rem:.1f}s remaining)")
+                if rem <= 0.0:
+                    self.append_log("Optical Step 3 Complete: Right wink thresholds recorded.")
+                    self._optical_step = 4
+                    self._step_start_t = time.perf_counter()
+                    self._progress.setValue(4)
+                    self._progress.setFormat("Optical Step 4/4: Pitch Head & Jaw Tap")
+                    self._cal_info.setText("OPTICAL STEP 4: Tilt head slightly up/down and tap jaw to calibrate pitch and MAR (3s)...")
+
+            elif self._optical_step == 4:
+                self._cal_info.setText(f"OPTICAL STEP 4: Pitch head & tap jaw... ({rem:.1f}s remaining)")
+                if rem <= 0.0:
+                    prof = self.optical_calibrator.compute_from_records(
+                        self._opt_bl_left,
+                        self._opt_bl_right,
+                        self._opt_bl_nose,
+                        self._opt_bl_dist,
+                        self._opt_wink_l,
+                        self._opt_comp_r,
+                        self._opt_wink_r,
+                        self._opt_comp_l,
+                        self._opt_jaw,
+                    )
+                    self._step_timer.stop()
+                    self._optical_step = 0
+                    self._progress.setValue(4)
+                    self._progress.setFormat("Optical Calibration Complete (4/4)")
+                    self._cal_info.setText("✅ OPTICAL CALIBRATION SAVED! Scroll/Zoom wink thresholds and neutral pose updated.")
+                    self._refresh_profile_display()
+                    self.sig_optical_calib_complete.emit(prof)
+                    self.append_log("Optical Calibration Complete: Saved to config/optical_calibration.json.")
+            return
+
+        # -------------------------------------------------------------
+        # Hardware 5-Step Piezo Steps
+        # -------------------------------------------------------------
         if self._calib_step == 1:
             self._cal_info.setText(f"STEP 1: Relax face completely. Capturing baseline... ({rem:.1f}s remaining)")
             if rem <= 0.0:

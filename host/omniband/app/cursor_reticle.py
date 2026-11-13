@@ -86,9 +86,10 @@ class SomaticCursorReticle(QWidget):
         self._update_hollow_mask()
         self._style_check_counter = 0
 
-        self.state = "NORMAL"  # NORMAL, CLICKED, DRAG_LOCKED, SCROLLING
+        self.state = "NORMAL"  # NORMAL, CLICKED, DRAG_LOCKED, SCROLLING, SCROLL_CLUTCH, ZOOM_CLUTCH
         self.dwell_progress = 0.0  # 0.0 to 1.0
         self._click_expire = 0.0
+        self.scroll_velocity: float = 0.0
 
         # 120 Hz Cursor tracking timer (8ms)
         self._timer = QTimer(self)
@@ -132,9 +133,27 @@ class SomaticCursorReticle(QWidget):
         self.update()
 
     def set_scrolling(self, scrolling: bool) -> None:
-        if self.state != "DRAG_LOCKED":
+        if self.state not in ("DRAG_LOCKED", "SCROLL_CLUTCH", "ZOOM_CLUTCH"):
             self.state = "SCROLLING" if scrolling else "NORMAL"
             self.update()
+
+    def set_scroll_clutch(self, active: bool, velocity: float = 0.0) -> None:
+        """Engage/disengage Asymmetric Left-Wink Scroll Clutch mode."""
+        if active:
+            self.state = "SCROLL_CLUTCH"
+            self.scroll_velocity = velocity
+        elif self.state == "SCROLL_CLUTCH":
+            self.state = "NORMAL"
+            self.scroll_velocity = 0.0
+        self.update()
+
+    def set_zoom_clutch(self, active: bool) -> None:
+        """Engage/disengage Asymmetric Right-Wink Doctor Zoom Clutch mode."""
+        if active:
+            self.state = "ZOOM_CLUTCH"
+        elif self.state == "ZOOM_CLUTCH":
+            self.state = "NORMAL"
+        self.update()
 
     def set_dwell_progress(self, progress: float) -> None:
         self.dwell_progress = max(0.0, min(1.0, progress))
@@ -169,6 +188,10 @@ class SomaticCursorReticle(QWidget):
             color = QColor("#00E676")  # Emerald Green
         elif self.state == "DRAG_LOCKED":
             color = QColor("#E0303D")  # Crimson
+        elif self.state == "SCROLL_CLUTCH":
+            color = QColor("#00E5FF")  # Bright Cyan/Blue Scroll Ring
+        elif self.state == "ZOOM_CLUTCH":
+            color = QColor("#D500F9")  # Neon Violet/Magenta Precision Zoom
         elif self.state == "SCROLLING":
             color = QColor("#FFD600")  # Amber Yellow
         else:
@@ -208,6 +231,28 @@ class SomaticCursorReticle(QWidget):
             p.setFont(QFont("Cascadia Code", 7, QFont.Bold))
             p.setPen(QPen(color))
             p.drawText(int(cx - 12), int(cy + 24), "HOLD")
+        elif self.state == "SCROLL_CLUTCH":
+            p.setFont(QFont("Cascadia Code", 7, QFont.Bold))
+            p.setPen(QPen(color))
+            p.drawText(int(cx - 16), int(cy + 24), "SCROLL")
+            p.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            if self.scroll_velocity > 0:
+                p.drawText(int(cx - 4), int(cy - 16), "▲")
+            elif self.scroll_velocity < 0:
+                p.drawText(int(cx - 4), int(cy + 24), "▼")
+            else:
+                p.drawText(int(cx - 4), int(cy - 16), "▲")
+                p.drawText(int(cx - 4), int(cy + 24), "▼")
+        elif self.state == "ZOOM_CLUTCH":
+            p.setFont(QFont("Cascadia Code", 7, QFont.Bold))
+            p.setPen(QPen(color))
+            p.drawText(int(cx - 18), int(cy + 24), "🔍 ZOOM")
+            # Precision doctor crosshair extension
+            p.setPen(QPen(color, 2.0))
+            p.drawLine(int(cx - 12), int(cy), int(cx - 4), int(cy))
+            p.drawLine(int(cx + 4), int(cy), int(cx + 12), int(cy))
+            p.drawLine(int(cx), int(cy - 12), int(cx), int(cy - 4))
+            p.drawLine(int(cx), int(cy + 4), int(cx), int(cy + 12))
         elif self.state == "SCROLLING":
             p.setFont(QFont("Segoe UI", 9, QFont.Bold))
             p.setPen(QPen(color))

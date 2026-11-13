@@ -31,6 +31,10 @@ from host.omniband.tracking.paths import (
     resource_path,
     ModelIntegrityError,
 )
+from host.omniband.tracking.optical_calibration import (
+    OpticalCalibrator,
+    OpticalCalibrationProfile,
+)
 
 log = logging.getLogger("omniband.tracking.webcam")
 
@@ -69,6 +73,9 @@ class TrackerResult:
     yaw: float  # Degrees (+ right, - left)
     pitch: float  # Degrees (+ down, - up)
     timestamp_ms: int
+    left_ear: Optional[float] = None
+    right_ear: Optional[float] = None
+    eye_dist: Optional[float] = None
     frame_rgb: Optional[np.ndarray] = None
 
 
@@ -372,6 +379,9 @@ class RealWebcamTracker:
         on_gesture: Optional[Callable[[int, bool, float], None]] = None,
         on_click: Optional[Callable[[], None]] = None,
         on_drag_toggle: Optional[Callable[[], None]] = None,
+        on_scroll_clutch: Optional[Callable[[bool, float], None]] = None,
+        on_zoom_clutch: Optional[Callable[[bool, float, float], None]] = None,
+        optical_calibrator: Optional[OpticalCalibrator] = None,
     ) -> None:
         self.camera_id = camera_id
         self.on_envelopes = on_envelopes
@@ -379,6 +389,9 @@ class RealWebcamTracker:
         self.on_gesture = on_gesture
         self.on_click = on_click
         self.on_drag_toggle = on_drag_toggle
+        self.on_scroll_clutch = on_scroll_clutch
+        self.on_zoom_clutch = on_zoom_clutch
+        self.calibrator = optical_calibrator or OpticalCalibrator()
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
@@ -415,10 +428,21 @@ class RealWebcamTracker:
         self.fps: float = 0.0
         self.current_ear: Optional[float] = None
         self.current_mar: Optional[float] = None
+        self.current_left_ear: Optional[float] = None
+        self.current_right_ear: Optional[float] = None
+        self.current_eye_dist: Optional[float] = None
         self.head_yaw: float = 0.0
         self.head_pitch: float = 0.0
         self.current_tier: str = "NO_FACE"
         self.latest_result: Optional[TrackerResult] = None
+
+        # Asymmetric Wink-Clutch State Machine (Scroll & Doctor Zoom)
+        self.active_clutch: str = "NONE"  # "NONE", "SCROLL", "ZOOM"
+        self._left_wink_start: float = 0.0
+        self._right_wink_start: float = 0.0
+        self._pitch_anchor_y: float = 0.45
+        self._scale_anchor_dist: float = 0.12
+        self._last_zoom_step_time: float = 0.0
 
         # Gesture state & adaptive baseline
         self._baseline_ear: float = 0.28
@@ -596,15 +620,20 @@ class RealWebcamTracker:
             self.current_tier = res.tier
             self.current_ear = res.ear
             self.current_mar = res.mar
+            self.current_left_ear = res.left_ear
+            self.current_right_ear = res.right_ear
+            self.current_eye_dist = res.eye_dist
             self.head_yaw = res.yaw
             self.head_pitch = res.pitch
 
             # Velocity integration
             self._update_velocity(res, now, w, h)
 
-            # Gesture decoding
-            if res.ear is not None and res.mar is not None:
-                self._process_gestures(res.ear, res.mar, now)
+            # Gesture decoding (Asymmetric Wink-Clutch + Blinks + Jaw)
+            if res.left_ear is not None and res.right_ear is not None and res.mar is not None:
+                self._process_gestures(res, now)
+            elif res.ear is not None and res.mar is not None:
+                self._process_legacy_gestures(res.ear, res.mar, now)
 
             # Envelopes
             self._emit_envelopes(res)
@@ -766,17 +795,31 @@ class RealWebcamTracker:
 
         ear: Optional[float] = None
         mar: Optional[float] = None
+        left_ear: Optional[float] = None
+        right_ear: Optional[float] = None
+        eye_dist: Optional[float] = None
+
+        left_eye_pts = [landmarks_px[i] for i in LEFT_EYE_INDICES]
+        right_eye_pts = [landmarks_px[i] for i in RIGHT_EYE_INDICES]
+        left_ear = calculate_ear(left_eye_pts)
+        right_ear = calculate_ear(right_eye_pts)
+        ear = (left_ear + right_ear) / 2.0
+
+        p_le = landmarks_3d[33]
+        p_re = landmarks_3d[263]
+        eye_dist = math.hypot(p_le[0] - p_re[0], p_le[1] - p_re[1])
 
         if blendshapes and len(blendshapes) > 0:
             bs = {b.category_name: b.score for b in blendshapes[0]}
             blink_score = (bs.get("eyeBlinkLeft", 0.0) + bs.get("eyeBlinkRight", 0.0)) / 2.0
-            ear = max(0.05, 0.35 * (1.0 - blink_score))
+            # Blendshape refine EAR if valid
+            blink_l = bs.get("eyeBlinkLeft", 0.0)
+            blink_r = bs.get("eyeBlinkRight", 0.0)
+            left_ear = max(0.05, 0.35 * (1.0 - blink_l))
+            right_ear = max(0.05, 0.35 * (1.0 - blink_r))
+            ear = (left_ear + right_ear) / 2.0
             mar = bs.get("jawOpen", 0.0)
         else:
-            left_eye_pts = [landmarks_px[i] for i in LEFT_EYE_INDICES]
-            right_eye_pts = [landmarks_px[i] for i in RIGHT_EYE_INDICES]
-            ear = (calculate_ear(left_eye_pts) + calculate_ear(right_eye_pts)) / 2.0
-
             inner_lip_pts = [landmarks_px[i] for i in INNER_LIP_INDICES]
             mar = calculate_mar(inner_lip_pts)
 
@@ -790,6 +833,9 @@ class RealWebcamTracker:
             yaw=yaw,
             pitch=pitch,
             timestamp_ms=timestamp_ms,
+            left_ear=left_ear,
+            right_ear=right_ear,
+            eye_dist=eye_dist,
         )
 
     # ------------------------------------------------------------------
@@ -839,7 +885,7 @@ class RealWebcamTracker:
             self.filter_dx.reset(now, 0.0)
             self.filter_dy.reset(now, 0.0)
 
-        if now < self._freeze_until:
+        if now < self._freeze_until or self.active_clutch in ("SCROLL", "ZOOM"):
             vx = 0.0
             vy = 0.0
 
@@ -849,14 +895,110 @@ class RealWebcamTracker:
             self._in_deadzone = in_deadzone
 
     # ------------------------------------------------------------------
-    # Gesture Decoders
+    # Gesture Decoders (Asymmetric Wink-Clutches + Bilateral Blinks)
     # ------------------------------------------------------------------
-    def _process_gestures(self, ear: float, mar: float, now: float) -> None:
+    def _process_gestures(self, res: TrackerResult, now: float) -> None:
+        left_ear = res.left_ear if res.left_ear is not None else 0.28
+        right_ear = res.right_ear if res.right_ear is not None else 0.28
+        mar = res.mar if res.mar is not None else 0.0
+        ear = res.ear if res.ear is not None else (left_ear + right_ear) / 2.0
+        ny = res.nose_tip[1] if res.nose_tip is not None else 0.45
+        eye_dist = res.eye_dist if res.eye_dist is not None else 0.12
+
+        prof = self.calibrator.profile
+
+        # 1. Check for Bilateral Blink (both eyes closed together)
+        # If BOTH eyes are below wink threshold, it is a BLINK, NOT A CLUTCH!
+        is_bilateral_blink = (left_ear < prof.left_wink_thresh) and (right_ear < prof.right_wink_thresh)
+
+        # 2. Check for Asymmetric Left Wink (Scroll Clutch: Left closed, Right open)
+        is_left_wink = (
+            left_ear < prof.left_wink_thresh
+            and right_ear >= prof.right_open_floor
+            and (right_ear - left_ear) >= prof.asym_margin
+        )
+
+        # 3. Check for Asymmetric Right Wink (Doctor Zoom Clutch: Right closed, Left open)
+        is_right_wink = (
+            right_ear < prof.right_wink_thresh
+            and left_ear >= prof.left_open_floor
+            and (left_ear - right_ear) >= prof.asym_margin
+        )
+
+        # ====================================================================
+        # CLUTCH STATE MACHINE (Sustained >= 220 ms)
+        # ====================================================================
+        clutch_hold_s = prof.clutch_min_hold_ms / 1000.0
+
+        if is_left_wink and not is_bilateral_blink:
+            if self._left_wink_start == 0.0:
+                self._left_wink_start = now
+            elif now - self._left_wink_start >= clutch_hold_s:
+                if self.active_clutch != "SCROLL":
+                    self.active_clutch = "SCROLL"
+                    self._pitch_anchor_y = ny
+                    self._last_gesture_banner = "🔵 SCROLL CLUTCH ENGAGED"
+                    self._gesture_banner_expire = now + 1.5
+                    if self.on_scroll_clutch:
+                        self.on_scroll_clutch(True, 0.0)
+
+                # While scroll clutch held, compute pitch delta
+                # Head Tilted UP = ny < pitch_anchor_y -> delta_pitch > 0 (Scroll UP)
+                delta_pitch = self._pitch_anchor_y - ny
+                if self.on_scroll_clutch:
+                    self.on_scroll_clutch(True, delta_pitch)
+        else:
+            self._left_wink_start = 0.0
+            if self.active_clutch == "SCROLL":
+                self.active_clutch = "NONE"
+                self._last_gesture_banner = "SCROLL CLUTCH RELEASED"
+                self._gesture_banner_expire = now + 0.8
+                if self.on_scroll_clutch:
+                    self.on_scroll_clutch(False, 0.0)
+
+        if is_right_wink and not is_bilateral_blink:
+            if self._right_wink_start == 0.0:
+                self._right_wink_start = now
+            elif now - self._right_wink_start >= clutch_hold_s:
+                if self.active_clutch != "ZOOM":
+                    self.active_clutch = "ZOOM"
+                    self._pitch_anchor_y = ny
+                    self._scale_anchor_dist = eye_dist
+                    self._last_gesture_banner = "🟣 DOCTOR ZOOM CLUTCH ENGAGED"
+                    self._gesture_banner_expire = now + 1.5
+                    if self.on_zoom_clutch:
+                        self.on_zoom_clutch(True, 0.0, 1.0)
+
+                delta_pitch = self._pitch_anchor_y - ny
+                scale_ratio = eye_dist / max(1e-4, self._scale_anchor_dist)
+                if self.on_zoom_clutch:
+                    self.on_zoom_clutch(True, delta_pitch, scale_ratio)
+        else:
+            self._right_wink_start = 0.0
+            if self.active_clutch == "ZOOM":
+                self.active_clutch = "NONE"
+                self._last_gesture_banner = "ZOOM CLUTCH RELEASED"
+                self._gesture_banner_expire = now + 0.8
+                if self.on_zoom_clutch:
+                    self.on_zoom_clutch(False, 0.0, 1.0)
+
+        # If a clutch is active, suppress normal clicks
+        if self.active_clutch in ("SCROLL", "ZOOM"):
+            self._blink_active = False
+            self._long_blink_fired = False
+            return
+
+        # ====================================================================
+        # NORMAL BILATERAL BLINK & JAW GESTURES
+        # ====================================================================
+        self._process_legacy_gestures(ear, mar, now)
+
+    def _process_legacy_gestures(self, ear: float, mar: float, now: float) -> None:
         # Update running baseline for open-eye EAR
         if ear > 0.22:
             self._baseline_ear = 0.95 * self._baseline_ear + 0.05 * ear
 
-        # Adaptive blink threshold (default ~0.22 to 0.24)
+        # Adaptive blink threshold
         blink_threshold = min(0.24, max(0.21, self._baseline_ear * 0.78))
         is_blinking = ear < blink_threshold
 
@@ -864,7 +1006,6 @@ class RealWebcamTracker:
             self._blink_active = True
             self._blink_start_time = now
 
-            # Check if this is the second blink of a double-blink (within 0.10s to 0.85s window)
             time_since_first = now - self._last_blink_time
             if 0.10 <= time_since_first <= 0.85:
                 self.trigger_blink_freeze(0.35)
@@ -879,7 +1020,6 @@ class RealWebcamTracker:
                 self._gesture_banner_expire = now + 0.85
 
         elif is_blinking and self._blink_active:
-            # Deliberate Long Blink / Wink: holding eyes closed for >= 0.40s triggers click
             closed_dur = now - self._blink_start_time
             if closed_dur >= 0.40 and not self._long_blink_fired:
                 self._long_blink_fired = True
@@ -894,8 +1034,8 @@ class RealWebcamTracker:
             self._blink_active = False
             self._long_blink_fired = False
 
-        # Jaw tap -> Click / Jaw hold -> Drag Latch (jaw threshold 0.18)
-        jaw_threshold = 0.18
+        # Jaw tap -> Click / Jaw hold -> Drag Latch
+        jaw_threshold = self.calibrator.profile.jaw_click_thresh
         is_jaw_open = mar > jaw_threshold
         if is_jaw_open:
             if self._jaw_open_start == 0.0:
@@ -1040,10 +1180,13 @@ class RealWebcamTracker:
             cv2.putText(frame_rgb, status, (16, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.50, ring_color, 2, cv2.LINE_AA)
 
             ear_str = f"{self.current_ear:.2f}" if self.current_ear is not None else "--"
+            l_ear_str = f"{self.current_left_ear:.2f}" if self.current_left_ear is not None else "--"
+            r_ear_str = f"{self.current_right_ear:.2f}" if self.current_right_ear is not None else "--"
             mar_str = f"{self.current_mar:.2f}" if self.current_mar is not None else "--"
+            clutch_str = self.active_clutch
             cv2.putText(
                 frame_rgb,
-                f"FPS: {self.fps:4.1f} | EAR: {ear_str} | MAR: {mar_str} | TIER: {self.current_tier}",
+                f"FPS: {self.fps:4.1f} | L:{l_ear_str} R:{r_ear_str} | MAR:{mar_str} | CLUTCH: {clutch_str}",
                 (16, h - 16),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (247, 245, 240), 1, cv2.LINE_AA,
             )

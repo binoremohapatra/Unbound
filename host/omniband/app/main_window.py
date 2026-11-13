@@ -43,6 +43,8 @@ from host.omniband.tracking.webcam_tracker import RealWebcamTracker
 from host.omniband.tracking.physical_keys import PhysicalKeyPoller
 from host.omniband.hardware.ble_client import OmniBandBleClient
 from host.omniband.hardware.hardware_calibration import HardwareCalibrator
+from host.omniband.tracking.optical_calibration import OpticalCalibrator, OpticalCalibrationProfile
+from host.omniband.app.text_focus_watcher import TextFocusWatcher
 
 
 class MainWindow(QMainWindow):
@@ -53,6 +55,7 @@ class MainWindow(QMainWindow):
     sig_ble_connection = Signal(bool, str)
     sig_ble_metrics = Signal(int, float)
     sig_ble_frame = Signal(list, list, int)
+    sig_text_focus = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -61,6 +64,7 @@ class MainWindow(QMainWindow):
 
         self.sig_biometric_click.connect(self._on_biometric_click)
         self.sig_drag_toggle.connect(self._toggle_drag_lock)
+        self.sig_text_focus.connect(self._on_text_focus_auto_popup)
 
         # Child windows & agents
         self.hud = HudOverlay()
@@ -71,6 +75,8 @@ class MainWindow(QMainWindow):
             on_type_fn=self._inject_keyboard_char,
             on_scroll_fn=self._inject_mouse_scroll,
             on_toggle_drag_fn=self._toggle_drag_lock,
+            on_zoom_fn=self._inject_zoom_step,
+            on_zoom_reset_fn=self._inject_zoom_reset,
         )
 
         self.tray = SystemTrayAgent(self)
@@ -205,8 +211,13 @@ class MainWindow(QMainWindow):
         self.arena = ArenaWidget()
         self.icu = IcuView()
         self.calibrator = HardwareCalibrator()
-        self.calib = CalibrationView(calibrator=self.calibrator)
+        self.optical_calibrator = OpticalCalibrator()
+        self.calib = CalibrationView(
+            calibrator=self.calibrator,
+            optical_calibrator=self.optical_calibrator,
+        )
         self.calib.sig_apply_thresholds.connect(self.scope.set_thresholds)
+        self.calib.sig_optical_calib_complete.connect(self._on_optical_calib_updated)
 
         # Camera Preview Tab
         self.camera_tab = QWidget()
@@ -215,6 +226,10 @@ class MainWindow(QMainWindow):
         cam_ctrls = QHBoxLayout()
         self._btn_recenter = QPushButton("🎯 Recenter Face (Zero)")
         self._btn_recenter.clicked.connect(lambda: self.webcam_tracker.recenter())
+
+        self._btn_calib_optical = QPushButton("👁️ Calibrate Wink / Scroll / Zoom")
+        self._btn_calib_optical.setStyleSheet(f"background-color: #00E5FF; color: #111; font-weight: bold;")
+        self._btn_calib_optical.clicked.connect(lambda: (self.tabs.setCurrentIndex(5), self.calib.start_optical_calibration()))
 
         self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse (120Hz Decoupled)")
         self._chk_head_mouse.setChecked(True)
@@ -321,6 +336,9 @@ class MainWindow(QMainWindow):
             on_gesture=self._on_optical_gesture,
             on_click=self.sig_biometric_click.emit,
             on_drag_toggle=self.sig_drag_toggle.emit,
+            on_scroll_clutch=self._on_scroll_clutch_event,
+            on_zoom_clutch=self._on_zoom_clutch_event,
+            optical_calibrator=self.optical_calibrator,
         )
         self.webcam_tracker.start()
 
@@ -354,6 +372,12 @@ class MainWindow(QMainWindow):
         )
         self.watcher.start()
 
+        # Text Focus Watcher for Auto-Popup Virtual Keyboard
+        self.focus_watcher = TextFocusWatcher(
+            on_text_focus_changed=lambda f: self.sig_text_focus.emit(f)
+        )
+        self.focus_watcher.start()
+
         # Connect BLE Signals
         self.sig_ble_connection.connect(self._on_ble_connection_event)
         self.sig_ble_metrics.connect(self._on_ble_metrics_event)
@@ -375,6 +399,14 @@ class MainWindow(QMainWindow):
             qimg = QImage(frame_rgb.data, w, h, bytes_per_line, QImage.Format_RGB888)
             pix = QPixmap.fromImage(qimg).scaled(480, 360, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             self.camera_lbl.setPixmap(pix)
+            # Feed frame into optical calibrator if active
+            self.calib.feed_optical_frame(
+                self.webcam_tracker.current_left_ear,
+                self.webcam_tracker.current_right_ear,
+                self.webcam_tracker.current_mar,
+                self.webcam_tracker.latest_result.nose_tip if self.webcam_tracker.latest_result else None,
+                self.webcam_tracker.current_eye_dist,
+            )
             # Live Biometric Telemetry update
             ear_str = f"{self.webcam_tracker.current_ear:.2f}" if self.webcam_tracker.current_ear is not None else "--"
             mar_str = f"{self.webcam_tracker.current_mar:.2f}" if self.webcam_tracker.current_mar is not None else "--"
@@ -393,6 +425,9 @@ class MainWindow(QMainWindow):
         if not self.webcam_tracker.head_mouse_enabled:
             return
         if time.perf_counter() < self.webcam_tracker.freeze_until:
+            return
+        if self.webcam_tracker.active_clutch in ("SCROLL", "ZOOM"):
+            # Cursor position is LOCKED while clutch is held!
             return
 
         vx, vy, in_deadzone = self.webcam_tracker.velocity_state
@@ -551,6 +586,106 @@ class MainWindow(QMainWindow):
         self.calib.append_log("BIOMETRIC: Left Click registered via facial gesture")
         now_str = time.strftime("%H:%M:%S")
         self._lbl_proof_last.setText(f"LAST INJECTION: LEFT CLICK (BIOMETRIC GESTURE) @ {now_str}")
+
+    def _on_scroll_clutch_event(self, active: bool, delta_pitch: float) -> None:
+        """Handle Asymmetric Left-Wink Scroll Clutch events."""
+        if hasattr(self, "reticle"):
+            self.reticle.set_scroll_clutch(active, delta_pitch)
+
+        if not active:
+            return
+
+        # Proportional scroll outside pitch deadzone
+        deadzone = self.optical_calibrator.profile.pitch_deadzone
+        if abs(delta_pitch) > deadzone:
+            excess = delta_pitch - (deadzone if delta_pitch > 0 else -deadzone)
+            # Head up -> delta_pitch > 0 -> wheel_delta > 0 (Scroll UP)
+            scale = self.optical_calibrator.profile.pitch_scroll_scale
+            wheel_delta = int(excess * scale)
+            if wheel_delta != 0:
+                self._inject_mouse_scroll(wheel_delta)
+
+    def _on_zoom_clutch_event(self, active: bool, delta_pitch: float, scale_ratio: float) -> None:
+        """Handle Asymmetric Right-Wink Doctor Zoom Clutch events."""
+        if hasattr(self, "reticle"):
+            self.reticle.set_zoom_clutch(active)
+
+        if not active:
+            return
+
+        now = time.perf_counter()
+        # Controlled cadence (every 140 ms per zoom step so it never overshoots)
+        if now - self.webcam_tracker._last_zoom_step_time < 0.14:
+            return
+
+        # Zoom in: Tilting head up (delta_pitch > 0.015) OR leaning closer (scale_ratio > 1.08)
+        # Zoom out: Tilting head down (delta_pitch < -0.015) OR leaning back (scale_ratio < 0.92)
+        if delta_pitch > 0.015 or scale_ratio > 1.08:
+            self._inject_zoom_step(1)
+            self.webcam_tracker._last_zoom_step_time = now
+        elif delta_pitch < -0.015 or scale_ratio < 0.92:
+            self._inject_zoom_step(-1)
+            self.webcam_tracker._last_zoom_step_time = now
+
+    def _inject_zoom_step(self, direction: int) -> None:
+        """Inject Ctrl + MouseWheel zoom step (+1 for in, -1 for out)."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            from ctypes import wintypes
+            user32 = ctypes.windll.user32
+
+            # Hold VK_CONTROL (0x11)
+            KEYEVENTF_KEYUP = 0x0002
+            MOUSEEVENTF_WHEEL = 0x0800
+            VK_CONTROL = 0x11
+
+            user32.keybd_event(VK_CONTROL, 0, 0, 0)
+            time.sleep(0.01)
+            wheel_amt = 120 if direction > 0 else -120
+            user32.mouse_event(MOUSEEVENTF_WHEEL, 0, 0, wheel_amt, 0)
+            time.sleep(0.01)
+            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+
+            now_str = time.strftime("%H:%M:%S")
+            self._lbl_proof_last.setText(f"ZOOM: {'IN (+)' if direction > 0 else 'OUT (-)'} (Ctrl+Wheel) @ {now_str}")
+            self.calib.append_log(f"PRECISION ZOOM: {'Zoom In (+120)' if direction > 0 else 'Zoom Out (-120)'}")
+        except Exception:
+            pass
+
+    def _inject_zoom_reset(self) -> None:
+        """Inject Ctrl + 0 to reset zoom to 100%."""
+        if sys.platform != "win32":
+            return
+        try:
+            import ctypes
+            user32 = ctypes.windll.user32
+            KEYEVENTF_KEYUP = 0x0002
+            VK_CONTROL = 0x11
+            VK_0 = 0x30
+
+            user32.keybd_event(VK_CONTROL, 0, 0, 0)
+            user32.keybd_event(VK_0, 0, 0, 0)
+            time.sleep(0.01)
+            user32.keybd_event(VK_0, 0, KEYEVENTF_KEYUP, 0)
+            user32.keybd_event(VK_CONTROL, 0, KEYEVENTF_KEYUP, 0)
+            now_str = time.strftime("%H:%M:%S")
+            self._lbl_proof_last.setText(f"ZOOM: RESET 100% (Ctrl+0) @ {now_str}")
+        except Exception:
+            pass
+
+    def _on_optical_calib_updated(self, prof: OpticalCalibrationProfile) -> None:
+        """Callback when optical calibration finishes."""
+        self.webcam_tracker.recenter()
+        self.calib.append_log(f"Profile updated: L-Wink={prof.left_wink_thresh:.2f}, R-Wink={prof.right_wink_thresh:.2f}")
+
+    def _on_text_focus_auto_popup(self, has_focus: bool) -> None:
+        """Auto popup the 35% bottom virtual keyboard when text typing focus is detected."""
+        if has_focus:
+            if not self.floating_kb.isVisible():
+                self.floating_kb.show()
+                self.calib.append_log("TEXT FOCUS DETECTED: Auto-docking floating virtual keyboard above taskbar.")
 
     def _on_speed_slider_changed(self, val: int) -> None:
         speed = val / 10.0
@@ -754,8 +889,19 @@ class MainWindow(QMainWindow):
         if ch == 1:
             cmds.append(OutputCommand(kind="key", name="a", pressed=down))
             self._lbl_proof_last.setText(f"LAST: F7 -> Key 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
-        # F8 -> CH2 (D / Steer R)
+        # F8 -> CH2 (Hardware Clutch or D / Steer R)
         elif ch == 2:
+            # If head-mouse mode is active, allow F8 to act as hardware scroll/zoom pitch clutch!
+            if self.webcam_tracker.head_mouse_enabled:
+                if down:
+                    self.webcam_tracker.active_clutch = "SCROLL"
+                    self.reticle.set_scroll_clutch(True)
+                    self._lbl_proof_last.setText(f"LAST: F8 -> HARDWARE SCROLL CLUTCH (HELD) @ {now_str}")
+                else:
+                    self.webcam_tracker.active_clutch = "NONE"
+                    self.reticle.set_scroll_clutch(False)
+                    self._lbl_proof_last.setText(f"LAST: F8 -> HARDWARE SCROLL CLUTCH (RELEASED) @ {now_str}")
+                return
             cmds.append(OutputCommand(kind="key", name="d", pressed=down))
             self._lbl_proof_last.setText(f"LAST: F8 -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
         # F9 -> CH3 (Cruise Latch Toggle: W)
@@ -789,7 +935,15 @@ class MainWindow(QMainWindow):
         held_str = ", ".join(held) if held else "NONE"
         self._lbl_proof_keys.setText(f"LIVE OS KEYS HELD: [{held_str}]")
 
-        # Update HUD Overlay Proof Bar
+        # Update HUD Overlay Proof Bar & Biometric Optical Bar
+        opt_str = ""
+        if hasattr(self, "webcam_tracker"):
+            le = f"{self.webcam_tracker.current_left_ear:.2f}" if self.webcam_tracker.current_left_ear is not None else "--"
+            re = f"{self.webcam_tracker.current_right_ear:.2f}" if self.webcam_tracker.current_right_ear is not None else "--"
+            clutch = self.webcam_tracker.active_clutch
+            pitch = self.webcam_tracker.head_pitch
+            opt_str = f"OPTICAL: L:{le} R:{re} | PITCH:{pitch:+4.1f}° | CLUTCH: {clutch}"
+
         self.hud.update_telemetry(
             tier_name=self._lbl_tier.text(),
             mode_name=self._combo_mode.currentText()[:16],
@@ -798,6 +952,7 @@ class MainWindow(QMainWindow):
             bar_vals=[0.2, 0.4, 0.3, 0.5],
             target_win=target_name,
             held_keys=held,
+            optical_status=opt_str,
         )
 
     def _on_auto_rule_applied(self, rule: ProfileRule) -> None:
@@ -920,6 +1075,8 @@ class MainWindow(QMainWindow):
         self.status.showMessage("⚠️ All inputs released by operator failsafe", 4000)
 
     def _force_exit(self) -> None:
+        if hasattr(self, "focus_watcher"):
+            self.focus_watcher.stop()
         self.tray.hide()
         self.hud.hide()
         QApplication.quit()

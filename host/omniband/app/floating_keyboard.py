@@ -41,18 +41,24 @@ class FloatingKeyboardWindow(QWidget):
 
     sig_scroll = Signal(int)  # +1 for up, -1 for down
     sig_toggle_drag = Signal()
+    sig_zoom = Signal(int)  # +1 for in, -1 for out
+    sig_zoom_reset = Signal()
 
     def __init__(
         self,
         on_type_fn: Optional[Callable[[str], None]] = None,
         on_scroll_fn: Optional[Callable[[int], None]] = None,
         on_toggle_drag_fn: Optional[Callable[[], None]] = None,
+        on_zoom_fn: Optional[Callable[[int], None]] = None,
+        on_zoom_reset_fn: Optional[Callable[[], None]] = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self.on_type_fn = on_type_fn
         self.on_scroll_fn = on_scroll_fn
         self.on_toggle_drag_fn = on_toggle_drag_fn
+        self.on_zoom_fn = on_zoom_fn
+        self.on_zoom_reset_fn = on_zoom_reset_fn
 
         self.setWindowFlags(
             Qt.Window
@@ -128,6 +134,26 @@ class FloatingKeyboardWindow(QWidget):
         action_dock.addWidget(self.btn_drag)
         action_dock.addWidget(self.btn_scroll_up)
         action_dock.addWidget(self.btn_scroll_down)
+
+        # Doctor Precision Zoom Action Buttons
+        btn_zoom_in = QPushButton("🔍 ZOOM +")
+        btn_zoom_in.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        btn_zoom_in.setStyleSheet(f"background: {SURFACE_1}; color: #D500F9; border: 1px solid #555; border-radius: 4px; padding: 4px;")
+        btn_zoom_in.clicked.connect(lambda: self._on_zoom_step(1))
+
+        btn_zoom_out = QPushButton("🔍 ZOOM -")
+        btn_zoom_out.setFont(QFont("Segoe UI", 8, QFont.Bold))
+        btn_zoom_out.setStyleSheet(f"background: {SURFACE_1}; color: #D500F9; border: 1px solid #555; border-radius: 4px; padding: 4px;")
+        btn_zoom_out.clicked.connect(lambda: self._on_zoom_step(-1))
+
+        btn_zoom_reset = QPushButton("🔍 100% RESET")
+        btn_zoom_reset.setFont(QFont("Segoe UI", 7, QFont.Bold))
+        btn_zoom_reset.setStyleSheet(f"background: {SURFACE_1}; color: {INDUSTRIAL_IVORY}; border: 1px solid #555; border-radius: 4px; padding: 3px;")
+        btn_zoom_reset.clicked.connect(self._on_zoom_reset)
+
+        action_dock.addWidget(btn_zoom_in)
+        action_dock.addWidget(btn_zoom_out)
+        action_dock.addWidget(btn_zoom_reset)
         root.addLayout(action_dock, stretch=1)
 
         self.setStyleSheet(f"background-color: rgba(24, 26, 27, 0.95); border: 2px solid {BURNT_ORANGE}; border-radius: 8px;")
@@ -184,6 +210,16 @@ class FloatingKeyboardWindow(QWidget):
         if self.on_scroll_fn:
             self.on_scroll_fn(delta)
         self.sig_scroll.emit(delta)
+
+    def _on_zoom_step(self, direction: int) -> None:
+        if self.on_zoom_fn:
+            self.on_zoom_fn(direction)
+        self.sig_zoom.emit(direction)
+
+    def _on_zoom_reset(self) -> None:
+        if self.on_zoom_reset_fn:
+            self.on_zoom_reset_fn()
+        self.sig_zoom_reset.emit()
 
     def _launch_windows_osk(self) -> None:
         try:

@@ -20,8 +20,7 @@ import time
 from typing import Callable, List, Optional
 
 from PySide6.QtWidgets import (
-    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGridLayout,
-    QPlainTextEdit
+    QWidget, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QGridLayout
 )
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFont, QColor
@@ -61,6 +60,7 @@ class SomaticKeyboardWidget(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setFocusPolicy(Qt.NoFocus)
         self.on_type_fn = on_type_fn
         self.on_dismiss_fn = on_dismiss_fn
 
@@ -94,21 +94,24 @@ class SomaticKeyboardWidget(QWidget):
         layout.setSpacing(6)
 
         # Header instructions
-        hdr = QLabel("⌨️ SOMATIC ZERO-HAND KEYBOARD (CH1=← | CH2=→ | CH3=↓ Row | CH4=Type)")
-        hdr.setFont(QFont("Segoe UI", 11, QFont.Bold))
+        hdr = QLabel("⌨️ SOMATIC ZERO-HAND KEYBOARD (DIRECT IN-PLACE TYPING)")
+        hdr.setFont(QFont("Segoe UI", 10, QFont.Bold))
         hdr.setStyleSheet(f"color: {BURNT_ORANGE};")
         layout.addWidget(hdr)
 
-        # Live text preview box
-        self.preview_edit = QPlainTextEdit()
-        self.preview_edit.setPlaceholderText("Typed text will appear here and inject directly into target application...")
-        self.preview_edit.setFixedHeight(70)
-        self.preview_edit.setFont(QFont("Cascadia Code", 11))
-        self.preview_edit.setStyleSheet(f"background: {SURFACE_1}; color: {INDUSTRIAL_IVORY}; border: 1px solid #444; border-radius: 4px;")
-        layout.addWidget(self.preview_edit)
+        # Non-focusable status banner (NO internal QLineEdit or QTextEdit trap!)
+        self.status_pill = QLabel("🟢 DIRECT INJECTION ACTIVE — KEYSTROKES ENTER TARGET APPLICATION CARET")
+        self.status_pill.setFont(QFont("Segoe UI", 9, QFont.Bold))
+        self.status_pill.setStyleSheet(
+            f"background: {SURFACE_1}; color: {INDUSTRIAL_IVORY}; "
+            "border: 1px solid #444; border-radius: 4px; padding: 4px 8px;"
+        )
+        self.status_pill.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.status_pill)
 
         # Keyboard Grid
         grid_widget = QWidget()
+        grid_widget.setFocusPolicy(Qt.NoFocus)
         grid_layout = QVBoxLayout(grid_widget)
         grid_layout.setSpacing(4)
         grid_layout.setContentsMargins(0, 4, 0, 0)
@@ -119,6 +122,7 @@ class SomaticKeyboardWidget(QWidget):
             row_btns = []
             for c_idx, key in enumerate(row):
                 btn = QPushButton(key)
+                btn.setFocusPolicy(Qt.NoFocus)
                 btn.setMinimumHeight(44)
                 btn.setFont(QFont("Cascadia Code", 10, QFont.Bold))
                 btn.setStyleSheet(f"""
@@ -190,37 +194,60 @@ class SomaticKeyboardWidget(QWidget):
         self._on_key_clicked(key)
 
     def _on_key_clicked(self, key: str) -> None:
-        val_to_type = ""
-
         if key.startswith("[PRED_"):
             pred_text = self.buttons[0][int(key[6]) - 1].text()
             if pred_text and not pred_text.startswith("["):
-                # Replace current prefix with full word + space
-                if self.curr_word:
-                    self.live_text = self.live_text[:-len(self.curr_word)]
-                val_to_type = pred_text + " "
+                # If prediction completes current prefix, send only remaining characters + space
+                if self.curr_word and pred_text.lower().startswith(self.curr_word.lower()):
+                    suffix = pred_text[len(self.curr_word):] + " "
+                    self.live_text += suffix
+                    if self.on_type_fn:
+                        self.on_type_fn(suffix)
+                    self.sig_key_typed.emit(suffix)
+                else:
+                    # Otherwise backspace the current prefix and inject full word + space
+                    for _ in range(len(self.curr_word)):
+                        if self.on_type_fn:
+                            self.on_type_fn("backspace")
+                    if self.curr_word:
+                        self.live_text = self.live_text[:-len(self.curr_word)]
+                    full = pred_text + " "
+                    self.live_text += full
+                    if self.on_type_fn:
+                        self.on_type_fn(full)
+                    self.sig_key_typed.emit(full)
                 self.curr_word = ""
+                self._refresh_predictions()
+            return
         elif key == "SPACE":
-            val_to_type = " "
+            self.live_text += " "
             self.curr_word = ""
+            self._refresh_predictions()
+            if self.on_type_fn:
+                self.on_type_fn(" ")
+            self.sig_key_typed.emit(" ")
+            return
         elif key == "BACKSPACE":
             if self.live_text:
                 self.live_text = self.live_text[:-1]
             if self.curr_word:
                 self.curr_word = self.curr_word[:-1]
-            self.preview_edit.setPlainText(self.live_text)
             self._refresh_predictions()
             if self.on_type_fn:
                 self.on_type_fn("backspace")
             self.sig_key_typed.emit("backspace")
             return
         elif key == "ENTER":
-            val_to_type = "\n"
+            self.live_text += "\n"
             self.curr_word = ""
+            self._refresh_predictions()
+            if self.on_type_fn:
+                self.on_type_fn("\n")
+            self.sig_key_typed.emit("\n")
+            return
         elif key == "CLEAR":
             self.live_text = ""
             self.curr_word = ""
-            self.preview_edit.setPlainText("")
             self._refresh_predictions()
             return
         elif key == "SHIFT":
@@ -233,21 +260,15 @@ class SomaticKeyboardWidget(QWidget):
             return
         else:
             char = key.lower() if not self.shift_active else key.upper()
-            val_to_type = char
+            self.live_text += char
             if char.isalnum():
                 self.curr_word += char.lower()
             else:
                 self.curr_word = ""
-
-        if val_to_type:
-            self.live_text += val_to_type
-            self.preview_edit.setPlainText(self.live_text)
             self._refresh_predictions()
-
-            # Emit to external Gateway / target window
             if self.on_type_fn:
-                self.on_type_fn(val_to_type)
-            self.sig_key_typed.emit(val_to_type)
+                self.on_type_fn(char)
+            self.sig_key_typed.emit(char)
 
     def _refresh_predictions(self) -> None:
         """Update Row 0 with top-3 matching prefix predictions."""

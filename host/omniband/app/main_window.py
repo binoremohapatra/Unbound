@@ -758,12 +758,18 @@ class MainWindow(QMainWindow):
         self.webcam_tracker.recenter()
         self.calib.append_log(f"Profile updated: L-Wink={prof.left_wink_thresh:.2f}, R-Wink={prof.right_wink_thresh:.2f}")
 
-    def _on_text_focus_auto_popup(self, has_focus: bool) -> None:
+    def _on_text_focus_auto_popup(self, has_focus: bool, target_hwnd: int = 0) -> None:
         """Auto popup the 35% bottom virtual keyboard when text typing focus is detected."""
         if has_focus:
-            if not self.floating_kb.isVisible():
-                self.floating_kb.show()
-                self.calib.append_log("TEXT FOCUS DETECTED: Auto-docking floating virtual keyboard above taskbar.")
+            if hasattr(self, "floating_kb"):
+                if target_hwnd:
+                    self.floating_kb.set_last_external_hwnd(target_hwnd)
+                if not self.floating_kb.isVisible():
+                    self.floating_kb.show()
+                    self.calib.append_log("TEXT FOCUS DETECTED: Auto-docking floating virtual keyboard above taskbar.")
+        else:
+            if hasattr(self, "floating_kb") and self.floating_kb.isVisible():
+                self.floating_kb.dismiss()
 
     def _on_speed_slider_changed(self, val: int) -> None:
         speed = val / 10.0
@@ -847,27 +853,33 @@ class MainWindow(QMainWindow):
             self.calib.append_log("SYSTEM DISARMED: All keys released.")
 
     def _inject_keyboard_char(self, char: str) -> None:
-        """Inject character typed from Somatic Keyboard into active target app."""
-        if not self.armed:
+        """Inject character typed from Somatic Keyboard directly into active target app."""
+        if not self.armed or not char:
             return
-        from core.events import OutputCommand
-        cmds = []
-        if char == "backspace":
-            cmds.append(OutputCommand(kind="key", name="backspace", pressed=True))
-            cmds.append(OutputCommand(kind="key", name="backspace", pressed=False))
-        elif char == "\n":
-            cmds.append(OutputCommand(kind="key", name="enter", pressed=True))
-            cmds.append(OutputCommand(kind="key", name="enter", pressed=False))
-        elif char == " ":
-            cmds.append(OutputCommand(kind="key", name="space", pressed=True))
-            cmds.append(OutputCommand(kind="key", name="space", pressed=False))
-        elif len(char) == 1 and char.isalpha():
-            cmds.append(OutputCommand(kind="key", name=char.lower(), pressed=True))
-            cmds.append(OutputCommand(kind="key", name=char.lower(), pressed=False))
 
-        if cmds:
-            self.gw.apply(cmds)
-            self.gw.flush(time.perf_counter())
+        # Restore external target focus if focus was stolen
+        if sys.platform == "win32":
+            try:
+                user32 = ctypes.windll.user32
+                fg = user32.GetForegroundWindow()
+                my_hwnd = int(self.winId()) if hasattr(self, "winId") else 0
+                kb_hwnd = int(self.floating_kb.winId()) if hasattr(self, "floating_kb") else 0
+                if fg in (my_hwnd, kb_hwnd, 0):
+                    target = self.floating_kb.get_last_external_hwnd() if hasattr(self, "floating_kb") else 0
+                    if target:
+                        user32.SetForegroundWindow(target)
+            except Exception:
+                pass
+
+        # Send control keys or arbitrary unicode text directly via Gateway SendInput
+        if char == "backspace":
+            self.gw.send_key_vk(0x08)  # VK_BACK
+        elif char == "\n":
+            self.gw.send_key_vk(0x0D)  # VK_RETURN
+        elif char == "\t":
+            self.gw.send_key_vk(0x09)  # VK_TAB
+        else:
+            self.gw.send_unicode_text(char)
 
     def _on_optical_gesture(self, ch: int, down: bool, amp: float) -> None:
         """Inject real OS keys only when in an actual game window and NOT in head-mouse mode."""

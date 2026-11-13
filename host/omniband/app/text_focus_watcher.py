@@ -125,6 +125,7 @@ class TextFocusWatcher:
         self._user_dismissed = True  # Starts dismissed so startup NEVER pops up
         self._last_hwnd_fg = 0
         self._dismissed_hwnd = 0
+        self._active_target_hwnd = 0
         self._prev_lbutton_down = False
         self._cached_proc_names: dict[int, tuple[float, str]] = {}
 
@@ -146,6 +147,10 @@ class TextFocusWatcher:
         with self._lock:
             return self._user_dismissed
 
+    @property
+    def active_target_hwnd(self) -> int:
+        return self._active_target_hwnd
+
     def dismiss(self) -> None:
         """Mark virtual keyboard as dismissed by the user."""
         with self._lock:
@@ -160,14 +165,105 @@ class TextFocusWatcher:
             self._user_dismissed = False
             self._is_text_focused = False
 
+    def _notify_focus_change(self, focused: bool, hwnd: int = 0) -> None:
+        """Safely notify callback with (focused, hwnd) or (focused)."""
+        if self.on_text_focus_changed:
+            try:
+                self.on_text_focus_changed(focused, hwnd)
+            except TypeError:
+                try:
+                    self.on_text_focus_changed(focused)
+                except Exception:
+                    pass
+            except Exception:
+                pass
+
     def notify_click(self, x: int = -1, y: int = -1) -> None:
-        """Called on biometric, somatic, or physical click to evaluate text field click after 80ms."""
+        """Called on click: checks immediately (t=0ms) and after settle (t=90ms)."""
+        self._evaluate_click_check(x, y)
         threading.Thread(
-            target=self._delayed_click_check,
+            target=self._delayed_click_worker,
             args=(x, y),
             daemon=True,
-            name="DelayedTextClickCheck",
+            name="DelayedTextClickWorker",
         ).start()
+
+    def _delayed_click_worker(self, click_x: int, click_y: int) -> None:
+        time.sleep(0.090)
+        self._evaluate_click_check(click_x, click_y)
+
+    def _evaluate_click_check(self, click_x: int, click_y: int) -> None:
+        """Universal app-agnostic text field detector on Left-Click."""
+        if os.name != "nt" or not self._running:
+            return
+        if time.monotonic() < self._startup_suppress_until:
+            return
+        try:
+            user32 = ctypes.windll.user32
+            hwnd_fg = user32.GetForegroundWindow()
+            if not hwnd_fg:
+                return
+
+            # Check if desktop or taskbar was clicked -> auto-dismiss
+            cls_buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd_fg, cls_buf, 256)
+            cls_name = cls_buf.value
+            if cls_name in ("Shell_TrayWnd", "Progman", "WorkerW"):
+                self.dismiss()
+                self._notify_focus_change(False, hwnd_fg)
+                return
+
+            proc_fg = self._get_process_name_cached(hwnd_fg)
+            if not proc_fg or proc_fg == "unbound.exe":
+                return
+
+            # Signal A: Universal IDC_IBEAM cursor check
+            ci = CURSORINFO()
+            ci.cbSize = ctypes.sizeof(CURSORINFO)
+            is_ibeam = False
+            pt_x, pt_y = click_x, click_y
+            if user32.GetCursorInfo(ctypes.byref(ci)):
+                is_ibeam = self._is_cursor_ibeam(ci.hCursor)
+                if pt_x == -1 or pt_y == -1:
+                    pt_x, pt_y = ci.ptScreenPos.x, ci.ptScreenPos.y
+
+            # Signal B: Win32 Blinking Caret / Caret Window
+            has_caret = False
+            pid = wintypes.DWORD(0)
+            tid = user32.GetWindowThreadProcessId(hwnd_fg, ctypes.byref(pid))
+            if tid and pid.value != os.getpid():
+                gti = GUITHREADINFO()
+                gti.cbSize = ctypes.sizeof(GUITHREADINFO)
+                if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
+                    if (gti.flags & GUI_CARETBLINKING) or (gti.hwndCaret != 0):
+                        has_caret = True
+
+            # Signal C: Editable control class under cursor (Edit, RichEdit, Scintilla, etc.)
+            is_edit_control = False
+            if pt_x != -1 and pt_y != -1:
+                pt = wintypes.POINT(pt_x, pt_y)
+                hwnd_pt = user32.WindowFromPoint(pt)
+                if hwnd_pt:
+                    cls_pt_buf = ctypes.create_unicode_buffer(256)
+                    user32.GetClassNameW(hwnd_pt, cls_pt_buf, 256)
+                    cls_pt_name = cls_pt_buf.value.lower()
+                    if any(t in cls_pt_name for t in ("edit", "rich", "scintilla", "text", "input")):
+                        is_edit_control = True
+
+            should_popup = is_ibeam or has_caret or is_edit_control
+            if should_popup:
+                self._active_target_hwnd = hwnd_fg
+                with self._lock:
+                    self._user_dismissed = False
+                    self._is_text_focused = True
+                self._notify_focus_change(True, hwnd_fg)
+            else:
+                # User clicked outside onto a non-text area -> auto-dismiss
+                if not self.is_dismissed:
+                    self.dismiss()
+                    self._notify_focus_change(False, hwnd_fg)
+        except Exception:
+            pass
 
     def simulate_focus(self, focused: bool) -> None:
         """Used by tests to simulate text focus transitions."""
@@ -239,81 +335,6 @@ class TextFocusWatcher:
             self._cached_proc_names = {h: v for h, v in self._cached_proc_names.items() if now - v[0] < 5.0}
         return name
 
-    def _delayed_click_check(self, click_x: int, click_y: int) -> None:
-        """Evaluates focus 80ms after a click so target app processes focus."""
-        time.sleep(0.080)
-        if os.name != "nt" or not self._running:
-            return
-        try:
-            user32 = ctypes.windll.user32
-            hwnd_fg = user32.GetForegroundWindow()
-            if not hwnd_fg:
-                return
-
-            # Check if desktop or taskbar was clicked -> dismiss keyboard
-            cls_buf = ctypes.create_unicode_buffer(256)
-            user32.GetClassNameW(hwnd_fg, cls_buf, 256)
-            cls_name = cls_buf.value
-            if cls_name in ("Shell_TrayWnd", "Progman", "WorkerW"):
-                self.dismiss()
-                if self.on_text_focus_changed:
-                    self.on_text_focus_changed(False)
-                return
-
-            proc_fg = self._get_process_name_cached(hwnd_fg)
-            if not proc_fg or proc_fg == "unbound.exe":
-                return
-
-            # 1. Cursor shape check (IDC_IBEAM)
-            ci = CURSORINFO()
-            ci.cbSize = ctypes.sizeof(CURSORINFO)
-            is_ibeam = False
-            pt_x, pt_y = click_x, click_y
-            if user32.GetCursorInfo(ctypes.byref(ci)):
-                is_ibeam = self._is_cursor_ibeam(ci.hCursor)
-                if pt_x == -1 or pt_y == -1:
-                    pt_x, pt_y = ci.ptScreenPos.x, ci.ptScreenPos.y
-
-            # 2. Caret check via GetGUIThreadInfo
-            has_caret = False
-            pid = wintypes.DWORD(0)
-            tid = user32.GetWindowThreadProcessId(hwnd_fg, ctypes.byref(pid))
-            if tid and pid.value != os.getpid():
-                gti = GUITHREADINFO()
-                gti.cbSize = ctypes.sizeof(GUITHREADINFO)
-                if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
-                    if (gti.flags & GUI_CARETBLINKING) or (gti.hwndCaret != 0):
-                        has_caret = True
-
-            # 3. Target App (WhatsApp, Chrome, Notepad, etc.) check
-            is_target_app = proc_fg in TARGET_TEXT_APPS
-            title_buf = ctypes.create_unicode_buffer(512)
-            user32.GetWindowTextW(hwnd_fg, title_buf, 512)
-            win_title = title_buf.value.lower()
-            if "whatsapp" in win_title or "chat" in win_title:
-                is_target_app = True
-
-            # 4. Client area check (bottom 85% of window, not titlebar/tabs)
-            in_client_area = True
-            rc = wintypes.RECT()
-            if user32.GetWindowRect(hwnd_fg, ctypes.byref(rc)):
-                win_h = rc.bottom - rc.top
-                if win_h > 60 and pt_y != -1:
-                    in_client_area = pt_y >= (rc.top + int(win_h * 0.15))
-
-            should_popup = is_ibeam or has_caret or (is_target_app and in_client_area)
-            if should_popup:
-                with self._lock:
-                    self._user_dismissed = False
-                    self._is_text_focused = True
-                if self.on_text_focus_changed:
-                    try:
-                        self.on_text_focus_changed(True)
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
     def _worker_loop(self) -> None:
         user32 = ctypes.windll.user32
         dt = 1.0 / max(1.0, self.poll_hz)
@@ -342,7 +363,7 @@ class TextFocusWatcher:
                     if cls_buf.value in ("Shell_TrayWnd", "Progman", "WorkerW"):
                         focused = False
 
-                # 1. Check active caret blinking via GetGUIThreadInfo
+                # 1. Check active caret blinking via GetGUIThreadInfo (Signal B)
                 has_gui_caret = False
                 if hwnd_fg and proc_fg != "unbound.exe":
                     pid = wintypes.DWORD(0)
@@ -353,26 +374,19 @@ class TextFocusWatcher:
                         if user32.GetGUIThreadInfo(tid, ctypes.byref(gti)):
                             if (gti.flags & GUI_CARETBLINKING) or (gti.hwndCaret != 0):
                                 has_gui_caret = True
-                                focused = True
 
-                # 2. Check cursor icon (IDC_IBEAM) and window under cursor
+                # 2. Check cursor icon (IDC_IBEAM) - Signal A
                 ci = CURSORINFO()
                 ci.cbSize = ctypes.sizeof(CURSORINFO)
                 is_ibeam = False
-                hwnd_under = 0
-                proc_under = ""
-
                 if user32.GetCursorInfo(ctypes.byref(ci)):
                     is_ibeam = self._is_cursor_ibeam(ci.hCursor)
-                    if ci.ptScreenPos:
-                        hwnd_under = user32.WindowFromPoint(ci.ptScreenPos)
-                        if hwnd_under:
-                            proc_under = self._get_process_name_cached(hwnd_under)
 
-                    is_target_app = (proc_fg in TARGET_TEXT_APPS) or (proc_under in TARGET_TEXT_APPS)
-
-                    if is_ibeam and (is_target_app or proc_fg != ""):
+                # Universal OS-level text field focus: caret blinking or I-beam cursor on any external app
+                if proc_fg and proc_fg != "unbound.exe":
+                    if has_gui_caret or is_ibeam:
                         focused = True
+                        self._active_target_hwnd = hwnd_fg
 
                 # 3. Detect physical mouse click (VK_LBUTTON edge down)
                 lbutton_down = bool(user32.GetAsyncKeyState(0x01) & 0x8000)
@@ -409,10 +423,6 @@ class TextFocusWatcher:
             if focused != self._is_text_focused:
                 with self._lock:
                     self._is_text_focused = focused
-                if self.on_text_focus_changed:
-                    try:
-                        self.on_text_focus_changed(focused)
-                    except Exception:
-                        pass
+                self._notify_focus_change(focused, self._active_target_hwnd)
 
             time.sleep(dt)

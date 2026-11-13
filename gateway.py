@@ -63,7 +63,7 @@ if ctypes.sizeof(ctypes.c_void_p) == 8:
     assert ctypes.sizeof(INPUT) == 40, f"INPUT is {ctypes.sizeof(INPUT)} bytes, expected 40"
 
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
-KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE = 0x0001, 0x0002, 0x0008
+KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, KEYEVENTF_SCANCODE = 0x0001, 0x0002, 0x0004, 0x0008
 MOUSEEVENTF_MOVE = 0x0001
 MOUSEEVENTF_LEFTDOWN = 0x0002
 MOUSEEVENTF_LEFTUP = 0x0004
@@ -140,6 +140,8 @@ class Backend(Protocol):
     def mouse_button(self, name: str, down: bool) -> None: ...
     def mouse_move(self, dx: int, dy: int) -> None: ...
     def commit(self) -> None: ...
+    def send_unicode_text(self, text: str) -> None: ...
+    def send_key_vk(self, vk: int) -> None: ...
 
 
 class RecordingBackend:
@@ -168,12 +170,32 @@ class RecordingBackend:
     def commit(self) -> None:
         return None
 
+    def send_unicode_text(self, text: str) -> None:
+        self.log.append(("unicode", text))
+
+    def send_key_vk(self, vk: int) -> None:
+        self.log.append(("vk", vk))
+
 
 def build_key_input(name: str, down: bool) -> INPUT:
     code, ext = SCANCODES[name]
     flags = KEYEVENTF_SCANCODE | (KEYEVENTF_EXTENDEDKEY if ext else 0) | (0 if down else KEYEVENTF_KEYUP)
     inp = INPUT(type=INPUT_KEYBOARD)
     inp.u.ki = KEYBDINPUT(0, code, flags, 0, 0)
+    return inp
+
+
+def build_unicode_input(char_code: int, down: bool) -> INPUT:
+    inp = INPUT(type=INPUT_KEYBOARD)
+    flags = KEYEVENTF_UNICODE | (0 if down else KEYEVENTF_KEYUP)
+    inp.u.ki = KEYBDINPUT(0, char_code, flags, 0, 0)
+    return inp
+
+
+def build_vk_input(vk: int, down: bool) -> INPUT:
+    inp = INPUT(type=INPUT_KEYBOARD)
+    flags = (0 if down else KEYEVENTF_KEYUP)
+    inp.u.ki = KEYBDINPUT(vk, 0, flags, 0, 0)
     return inp
 
 
@@ -232,6 +254,30 @@ class SendInputBackend:
         # neither the return value nor GetLastError reveals it. elevation.ElevationMonitor handles it.
         if sent != n:
             log.error("SendInput sent %d/%d (GetLastError=%d)", sent, n, ctypes.GetLastError())
+
+    def send_unicode_text(self, text: str) -> None:
+        """Inject unicode text directly via SendInput KEYEVENTF_UNICODE."""
+        if not text:
+            return
+        inputs = []
+        for ch in text:
+            code = ord(ch)
+            inputs.append(build_unicode_input(code, True))
+            inputs.append(build_unicode_input(code, False))
+        n = len(inputs)
+        arr = (INPUT * n)(*inputs)
+        sent = self._user32.SendInput(n, arr, ctypes.sizeof(INPUT))
+        if sent != n:
+            log.error("SendInput unicode sent %d/%d (GetLastError=%d)", sent, n, ctypes.GetLastError())
+
+    def send_key_vk(self, vk: int) -> None:
+        """Inject a single virtual key code down+up directly via SendInput."""
+        inp_down = build_vk_input(vk, True)
+        inp_up = build_vk_input(vk, False)
+        arr = (INPUT * 2)(inp_down, inp_up)
+        sent = self._user32.SendInput(2, arr, ctypes.sizeof(INPUT))
+        if sent != 2:
+            log.error("SendInput vk sent %d/2 (GetLastError=%d)", sent, ctypes.GetLastError())
 
 
 # ------------------------------------------------------------------ gateway
@@ -419,6 +465,22 @@ class Gateway:
             self._sync_locked()
             self.button_map = dict(BUTTON_MAP, **(button_map or {}))
             self.axis_map = dict(AXIS_MAP, **(axis_map or {}))
+
+    def send_unicode_text(self, text: str) -> None:
+        """Send arbitrary unicode text directly into active foreground window."""
+        with self._lock:
+            if hasattr(self.backend, "send_unicode_text"):
+                self.backend.send_unicode_text(text)
+            elif hasattr(self.backend, "log"):
+                self.backend.log.append(("unicode", text))
+
+    def send_key_vk(self, vk: int) -> None:
+        """Send virtual key code (e.g. VK_BACK=0x08, VK_RETURN=0x0D) directly."""
+        with self._lock:
+            if hasattr(self.backend, "send_key_vk"):
+                self.backend.send_key_vk(vk)
+            elif hasattr(self.backend, "log"):
+                self.backend.log.append(("vk", vk))
 
     @property
     def held(self) -> frozenset:

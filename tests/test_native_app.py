@@ -121,9 +121,29 @@ def test_smart_virtual_keyboard_auto_popup_and_dismissal(qapp):
     assert "code.exe" in TARGET_TEXT_APPS
     assert "msedge.exe" in TARGET_TEXT_APPS
 
-    # 2. Somatic Keyboard has HIDE key and dismiss signal
-    sk = SomaticKeyboardWidget()
+    # 2. Somatic Keyboard has HIDE key, NO internal text edit trap, and emits directly
+    typed_keys = []
+    sk = SomaticKeyboardWidget(on_type_fn=lambda k: typed_keys.append(k))
+    assert not hasattr(sk, "preview_edit")  # Internal buffer trap removed!
+    assert sk.focusPolicy() == Qt.NoFocus
     assert "▼ HIDE" in sk.grid_rows[4]
+
+    # Typing key directly dispatches to external callback
+    sk._on_key_clicked("h")
+    sk._on_key_clicked("e")
+    sk._on_key_clicked("l")
+    sk._on_key_clicked("l")
+    sk._on_key_clicked("o")
+    assert typed_keys == ["h", "e", "l", "l", "o"]
+
+    # Space resets word and injects space
+    sk._on_key_clicked("SPACE")
+    assert typed_keys[-1] == " "
+
+    # Backspace injects backspace
+    sk._on_key_clicked("BACKSPACE")
+    assert typed_keys[-1] == "backspace"
+
     sk_dismissed = []
     sk.sig_dismiss.connect(lambda: sk_dismissed.append(True))
     sk._on_key_clicked("▼ HIDE")
@@ -421,4 +441,34 @@ def test_triple_blink_universal_exit_and_lookaway_guard():
     assert tracker.is_looking_away is True
     vx, vy, _ = tracker.velocity_state
     assert vx == 0.0 and vy == 0.0
+
+
+def test_gateway_send_unicode_and_direct_typing():
+    from gateway import Gateway, RecordingBackend, build_unicode_input, build_vk_input, KEYEVENTF_UNICODE
+    backend = RecordingBackend()
+    gw = Gateway(backend=backend)
+
+    # 1. Send unicode text
+    gw.send_unicode_text("Hello Gemini & WhatsApp! 😊")
+    assert ("unicode", "Hello Gemini & WhatsApp! 😊") in backend.log
+
+    # 2. Send VK key
+    gw.send_key_vk(0x08)  # VK_BACK
+    assert ("vk", 0x08) in backend.log
+
+    gw.send_key_vk(0x0D)  # VK_RETURN
+    assert ("vk", 0x0D) in backend.log
+
+    # 3. Verify unicode INPUT struct builder
+    inp = build_unicode_input(ord("A"), True)
+    assert inp.u.ki.wScan == ord("A")
+    assert inp.u.ki.dwFlags & KEYEVENTF_UNICODE
+
+    inp_up = build_unicode_input(ord("A"), False)
+    assert inp_up.u.ki.dwFlags & 0x0002  # KEYEVENTF_KEYUP
+
+    # 4. Verify VK INPUT struct builder
+    vk_inp = build_vk_input(0x08, True)
+    assert vk_inp.u.ki.wVk == 0x08
+    assert vk_inp.u.ki.dwFlags == 0
 

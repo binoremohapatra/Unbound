@@ -34,6 +34,7 @@ from host.omniband.app.somatic_keyboard import SomaticKeyboardWidget
 GWL_EXSTYLE = -20
 WS_EX_NOACTIVATE = 0x08000000
 WS_EX_TOPMOST = 0x00000008
+WS_EX_TOOLWINDOW = 0x00000080
 
 
 class FloatingKeyboardWindow(QWidget):
@@ -55,11 +56,13 @@ class FloatingKeyboardWindow(QWidget):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setFocusPolicy(Qt.NoFocus)
         self.on_type_fn = on_type_fn
         self.on_scroll_fn = on_scroll_fn
         self.on_toggle_drag_fn = on_toggle_drag_fn
         self.on_zoom_fn = on_zoom_fn
         self.on_zoom_reset_fn = on_zoom_reset_fn
+        self._last_external_hwnd: int = 0
 
         self.setWindowFlags(
             Qt.Window
@@ -90,10 +93,12 @@ class FloatingKeyboardWindow(QWidget):
         lbl_title.setStyleSheet(f"color: {BURNT_ORANGE};")
 
         btn_osk = QPushButton("Open Windows OSK")
+        btn_osk.setFocusPolicy(Qt.NoFocus)
         btn_osk.setFont(QFont("Segoe UI", 8))
         btn_osk.clicked.connect(self._launch_windows_osk)
 
         btn_close = QPushButton("▼ HIDE")
+        btn_close.setFocusPolicy(Qt.NoFocus)
         btn_close.setFont(QFont("Segoe UI", 8, QFont.Bold))
         btn_close.setStyleSheet(f"background: {SURFACE_2}; color: {BURNT_ORANGE}; border: 1px solid #555; border-radius: 4px; padding: 2px 8px;")
         btn_close.clicked.connect(self.dismiss)
@@ -104,34 +109,51 @@ class FloatingKeyboardWindow(QWidget):
         top_bar.addWidget(btn_close)
         kb_layout.addLayout(top_bar)
 
-        # Quick Daily Action Strip: [ 📋 COPY ], [ 📌 PASTE ], [ ↩️ UNDO ], [ ⬅️ BROWSER BACK ], [ 🔄 SWITCH APP (Alt+Tab) ], [ 🎤 VOICE TYPE (Win+H) ]
+        # Quick Daily Action Strip: [ 📋 COPY ], [ 📌 PASTE ], [ ↩️ UNDO ], [ ⬅️ BROWSER BACK ], [ 🔄 SWITCH APP (Alt+Tab) ], [ 🎙️ BOLO / VOICE TYPE (Win+H) ]
         action_strip = QHBoxLayout()
         action_strip.setSpacing(4)
 
         actions = [
-            ("📋 COPY", self._act_copy),
-            ("📌 PASTE", self._act_paste),
-            ("↩️ UNDO", self._act_undo),
-            ("⬅️ BROWSER BACK", self._act_back),
-            ("🔄 SWITCH APP", self._act_switch_app),
-            ("🎤 VOICE TYPE", self._act_voice_type),
+            ("📋 COPY", self._act_copy, False),
+            ("📌 PASTE", self._act_paste, False),
+            ("↩️ UNDO", self._act_undo, False),
+            ("⬅️ BROWSER BACK", self._act_back, False),
+            ("🔄 SWITCH APP", self._act_switch_app, False),
+            ("🎙️ BOLO / VOICE TYPE (Win+H)", self._act_voice_type, True),
         ]
-        for label, fn in actions:
+        for label, fn, is_voice in actions:
             btn = QPushButton(label)
+            btn.setFocusPolicy(Qt.NoFocus)
             btn.setFont(QFont("Segoe UI", 8, QFont.Bold))
-            btn.setStyleSheet(f"""
-                QPushButton {{
-                    background: {SURFACE_1};
-                    color: {INDUSTRIAL_IVORY};
-                    border: 1px solid #555;
-                    border-radius: 4px;
-                    padding: 3px 6px;
-                }}
-                QPushButton:hover {{
-                    background: {SURFACE_3};
-                    border-color: {BURNT_ORANGE};
-                }}
-            """)
+            if is_voice:
+                btn.setStyleSheet("""
+                    QPushButton {
+                        background: #004D40;
+                        color: #00E5FF;
+                        border: 1px solid #00E5FF;
+                        border-radius: 4px;
+                        padding: 3px 8px;
+                        font-weight: bold;
+                    }
+                    QPushButton:hover {
+                        background: #00695C;
+                        border-color: #18FFFF;
+                    }
+                """)
+            else:
+                btn.setStyleSheet(f"""
+                    QPushButton {{
+                        background: {SURFACE_1};
+                        color: {INDUSTRIAL_IVORY};
+                        border: 1px solid #555;
+                        border-radius: 4px;
+                        padding: 3px 6px;
+                    }}
+                    QPushButton:hover {{
+                        background: {SURFACE_3};
+                        border-color: {BURNT_ORANGE};
+                    }}
+                """)
             btn.clicked.connect(fn)
             action_strip.addWidget(btn)
 
@@ -147,6 +169,7 @@ class FloatingKeyboardWindow(QWidget):
         action_dock.setSpacing(6)
 
         self.btn_drag = QPushButton("🔒 DRAG\nHOLD")
+        self.btn_drag.setFocusPolicy(Qt.NoFocus)
         self.btn_drag.setFont(QFont("Segoe UI", 9, QFont.Bold))
         self.btn_drag.setMinimumWidth(80)
         self.btn_drag.setMinimumHeight(60)
@@ -154,6 +177,7 @@ class FloatingKeyboardWindow(QWidget):
         self.btn_drag.clicked.connect(self._on_drag_clicked)
 
         self.btn_scroll_up = QPushButton("▲ SCROLL\nUP")
+        self.btn_scroll_up.setFocusPolicy(Qt.NoFocus)
         self.btn_scroll_up.setFont(QFont("Segoe UI", 9, QFont.Bold))
         self.btn_scroll_up.setMinimumWidth(80)
         self.btn_scroll_up.setMinimumHeight(70)
@@ -161,6 +185,7 @@ class FloatingKeyboardWindow(QWidget):
         self.btn_scroll_up.clicked.connect(lambda: self._on_scroll(120))
 
         self.btn_scroll_down = QPushButton("▼ SCROLL\nDOWN")
+        self.btn_scroll_down.setFocusPolicy(Qt.NoFocus)
         self.btn_scroll_down.setFont(QFont("Segoe UI", 9, QFont.Bold))
         self.btn_scroll_down.setMinimumWidth(80)
         self.btn_scroll_down.setMinimumHeight(70)
@@ -173,16 +198,19 @@ class FloatingKeyboardWindow(QWidget):
 
         # Doctor Precision Zoom Action Buttons
         btn_zoom_in = QPushButton("🔍 ZOOM +")
+        btn_zoom_in.setFocusPolicy(Qt.NoFocus)
         btn_zoom_in.setFont(QFont("Segoe UI", 8, QFont.Bold))
         btn_zoom_in.setStyleSheet(f"background: {SURFACE_1}; color: #D500F9; border: 1px solid #555; border-radius: 4px; padding: 4px;")
         btn_zoom_in.clicked.connect(lambda: self._on_zoom_step(1))
 
         btn_zoom_out = QPushButton("🔍 ZOOM -")
+        btn_zoom_out.setFocusPolicy(Qt.NoFocus)
         btn_zoom_out.setFont(QFont("Segoe UI", 8, QFont.Bold))
         btn_zoom_out.setStyleSheet(f"background: {SURFACE_1}; color: #D500F9; border: 1px solid #555; border-radius: 4px; padding: 4px;")
         btn_zoom_out.clicked.connect(lambda: self._on_zoom_step(-1))
 
         btn_zoom_reset = QPushButton("🔍 100% RESET")
+        btn_zoom_reset.setFocusPolicy(Qt.NoFocus)
         btn_zoom_reset.setFont(QFont("Segoe UI", 7, QFont.Bold))
         btn_zoom_reset.setStyleSheet(f"background: {SURFACE_1}; color: {INDUSTRIAL_IVORY}; border: 1px solid #555; border-radius: 4px; padding: 3px;")
         btn_zoom_reset.clicked.connect(self._on_zoom_reset)
@@ -228,6 +256,26 @@ class FloatingKeyboardWindow(QWidget):
         self._dock_above_taskbar()
         self._apply_win32_noactivate()
 
+    def set_last_external_hwnd(self, hwnd: int) -> None:
+        """Store the external window handle that held text focus."""
+        if hwnd and hwnd != int(self.winId()):
+            self._last_external_hwnd = hwnd
+
+    def get_last_external_hwnd(self) -> int:
+        return self._last_external_hwnd
+
+    def _restore_external_focus_if_needed(self) -> None:
+        """Ensure external target window receives focus before hotkeys / typing."""
+        if sys.platform != "win32" or not self._last_external_hwnd:
+            return
+        try:
+            u32 = ctypes.windll.user32
+            fg = u32.GetForegroundWindow()
+            if fg == int(self.winId()) or fg == 0:
+                u32.SetForegroundWindow(self._last_external_hwnd)
+        except Exception:
+            pass
+
     def _apply_win32_noactivate(self) -> None:
         if sys.platform != "win32":
             return
@@ -235,7 +283,7 @@ class FloatingKeyboardWindow(QWidget):
             hwnd = int(self.winId())
             user32 = ctypes.windll.user32
             style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOPMOST)
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, style | WS_EX_NOACTIVATE | WS_EX_TOPMOST | WS_EX_TOOLWINDOW)
         except Exception:
             pass
 
@@ -277,6 +325,7 @@ class FloatingKeyboardWindow(QWidget):
     def _send_win32_hotkey(self, *vks: int) -> None:
         if sys.platform != "win32":
             return
+        self._restore_external_focus_if_needed()
         try:
             import time
             user32 = ctypes.windll.user32

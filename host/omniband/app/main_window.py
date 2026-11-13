@@ -338,6 +338,7 @@ class MainWindow(QMainWindow):
             on_drag_toggle=self.sig_drag_toggle.emit,
             on_scroll_clutch=self._on_scroll_clutch_event,
             on_zoom_clutch=self._on_zoom_clutch_event,
+            on_latch_changed=self._on_latch_state_changed,
             optical_calibrator=self.optical_calibrator,
         )
         self.webcam_tracker.start()
@@ -349,6 +350,14 @@ class MainWindow(QMainWindow):
         self._subpixel_x: float = 0.0
         self._subpixel_y: float = 0.0
         self._cursor_timer.start()
+
+        # 60 Hz Smooth Scroll Timer (16 ms tick)
+        self._scroll_delta_accum: float = 0.0
+        self._active_scroll_pitch: float = 0.0
+        self._scroll_timer = QTimer(self)
+        self._scroll_timer.setInterval(16)
+        self._scroll_timer.timeout.connect(self._on_scroll_60hz_tick)
+        self._scroll_timer.start()
 
         # Physical Key Poller (F7-F10 + F11 + F12)
         self.key_poller = PhysicalKeyPoller(
@@ -588,22 +597,52 @@ class MainWindow(QMainWindow):
         self._lbl_proof_last.setText(f"LAST INJECTION: LEFT CLICK (BIOMETRIC GESTURE) @ {now_str}")
 
     def _on_scroll_clutch_event(self, active: bool, delta_pitch: float) -> None:
-        """Handle Asymmetric Left-Wink Scroll Clutch events."""
+        """Handle Asymmetric Left-Wink Scroll Clutch / Latch events."""
         if hasattr(self, "reticle"):
             self.reticle.set_scroll_clutch(active, delta_pitch)
 
         if not active:
+            self._active_scroll_pitch = 0.0
             return
 
-        # Proportional scroll outside pitch deadzone
-        deadzone = self.optical_calibrator.profile.pitch_deadzone
-        if abs(delta_pitch) > deadzone:
+        self._active_scroll_pitch = delta_pitch
+
+    def _on_scroll_60hz_tick(self) -> None:
+        """60 Hz high-frequency smooth scroll injection loop."""
+        if self.webcam_tracker.active_latch != "SCROLL_LOCKED":
+            return
+        if hasattr(self, "_chk_head_mouse") and not self._chk_head_mouse.isChecked():
+            return
+
+        delta_pitch = self._active_scroll_pitch
+        deadzone = 0.010  # Neutral center zone (|delta_pitch| < 0.010)
+
+        if abs(delta_pitch) >= deadzone:
             excess = delta_pitch - (deadzone if delta_pitch > 0 else -deadzone)
-            # Head up -> delta_pitch > 0 -> wheel_delta > 0 (Scroll UP)
-            scale = self.optical_calibrator.profile.pitch_scroll_scale
-            wheel_delta = int(excess * scale)
+            # Head UP (delta_pitch > 0) -> Scroll UP (wheel_delta > 0)
+            # Proportional scaling (15 to 180 delta per 16ms tick)
+            raw_delta = excess * 1800.0
+            mag = max(15.0, min(180.0, abs(raw_delta)))
+            wheel_delta = int(mag if excess > 0 else -mag)
+
             if wheel_delta != 0:
                 self._inject_mouse_scroll(wheel_delta)
+
+    def _on_latch_state_changed(self, new_state: str) -> None:
+        """Update reticle and main HUD when latch state transitions."""
+        now_str = time.strftime("%H:%M:%S")
+        if new_state == "SCROLL_LOCKED":
+            self.status.showMessage("🔵 SCROLL LOCKED: Tilt head ▲/▼ to scroll | 😉 Right-Eye Wink to Exit", 5000)
+            self._lbl_proof_last.setText(f"MODE: SCROLL LOCKED @ {now_str}")
+            self.calib.append_log("LATCH: SCROLL LOCKED engaged (Continuous 60 Hz).")
+        elif new_state == "ZOOM_LOCKED":
+            self.status.showMessage("🟣 ZOOM LOCKED: Tilt head ▲/▼ to zoom | 😉 Left-Eye Wink to Exit", 5000)
+            self._lbl_proof_last.setText(f"MODE: ZOOM LOCKED @ {now_str}")
+            self.calib.append_log("LATCH: ZOOM LOCKED engaged.")
+        else:
+            self.status.showMessage("🟠 HEAD-MOUSE ACTIVE (CURSOR FREE)", 2500)
+            self._lbl_proof_last.setText(f"MODE: CURSOR (FREE) @ {now_str}")
+            self.calib.append_log("LATCH: Unlocked back to IDLE cursor tracking.")
 
     def _on_zoom_clutch_event(self, active: bool, delta_pitch: float, scale_ratio: float) -> None:
         """Handle Asymmetric Right-Wink Doctor Zoom Clutch events."""
@@ -614,16 +653,16 @@ class MainWindow(QMainWindow):
             return
 
         now = time.perf_counter()
-        # Controlled cadence (every 140 ms per zoom step so it never overshoots)
-        if now - self.webcam_tracker._last_zoom_step_time < 0.14:
+        # Controlled cadence (every 160 ms per zoom step so it never overshoots)
+        if now - self.webcam_tracker._last_zoom_step_time < 0.16:
             return
 
-        # Zoom in: Tilting head up (delta_pitch > 0.015) OR leaning closer (scale_ratio > 1.08)
-        # Zoom out: Tilting head down (delta_pitch < -0.015) OR leaning back (scale_ratio < 0.92)
-        if delta_pitch > 0.015 or scale_ratio > 1.08:
+        # Zoom in: Tilting head up (delta_pitch >= 0.012) OR leaning closer (scale_ratio > 1.08)
+        # Zoom out: Tilting head down (delta_pitch <= -0.012) OR leaning back (scale_ratio < 0.92)
+        if delta_pitch >= 0.012 or scale_ratio > 1.08:
             self._inject_zoom_step(1)
             self.webcam_tracker._last_zoom_step_time = now
-        elif delta_pitch < -0.015 or scale_ratio < 0.92:
+        elif delta_pitch <= -0.012 or scale_ratio < 0.92:
             self._inject_zoom_step(-1)
             self.webcam_tracker._last_zoom_step_time = now
 
@@ -894,13 +933,14 @@ class MainWindow(QMainWindow):
             # If head-mouse mode is active, allow F8 to act as hardware scroll/zoom pitch clutch!
             if self.webcam_tracker.head_mouse_enabled:
                 if down:
-                    self.webcam_tracker.active_clutch = "SCROLL"
-                    self.reticle.set_scroll_clutch(True)
-                    self._lbl_proof_last.setText(f"LAST: F8 -> HARDWARE SCROLL CLUTCH (HELD) @ {now_str}")
-                else:
-                    self.webcam_tracker.active_clutch = "NONE"
-                    self.reticle.set_scroll_clutch(False)
-                    self._lbl_proof_last.setText(f"LAST: F8 -> HARDWARE SCROLL CLUTCH (RELEASED) @ {now_str}")
+                    if self.webcam_tracker.active_latch == "IDLE":
+                        self.webcam_tracker.active_latch = "SCROLL_LOCKED"
+                        self.reticle.set_scroll_clutch(True)
+                        self._lbl_proof_last.setText(f"LAST: F8 -> HARDWARE SCROLL LATCH (LOCKED) @ {now_str}")
+                    else:
+                        self.webcam_tracker.active_latch = "IDLE"
+                        self.reticle.set_scroll_clutch(False)
+                        self._lbl_proof_last.setText(f"LAST: F8 -> HARDWARE SCROLL LATCH (UNLOCKED) @ {now_str}")
                 return
             cmds.append(OutputCommand(kind="key", name="d", pressed=down))
             self._lbl_proof_last.setText(f"LAST: F8 -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
@@ -937,16 +977,21 @@ class MainWindow(QMainWindow):
 
         # Update HUD Overlay Proof Bar & Biometric Optical Bar
         opt_str = ""
+        mode_pill = "MODE: 🟠 CURSOR (FREE)"
         if hasattr(self, "webcam_tracker"):
             le = f"{self.webcam_tracker.current_left_ear:.2f}" if self.webcam_tracker.current_left_ear is not None else "--"
             re = f"{self.webcam_tracker.current_right_ear:.2f}" if self.webcam_tracker.current_right_ear is not None else "--"
-            clutch = self.webcam_tracker.active_clutch
+            latch = self.webcam_tracker.active_latch
             pitch = self.webcam_tracker.head_pitch
-            opt_str = f"OPTICAL: L:{le} R:{re} | PITCH:{pitch:+4.1f}° | CLUTCH: {clutch}"
+            opt_str = f"OPTICAL: L:{le} R:{re} | PITCH:{pitch:+4.1f}° | LATCH: {latch}"
+            if latch == "SCROLL_LOCKED":
+                mode_pill = "MODE: 🔵 SCROLL LATCHED (Right-Wink = Unlock)"
+            elif latch == "ZOOM_LOCKED":
+                mode_pill = "MODE: 🟣 ZOOM LATCHED (Left-Wink = Unlock)"
 
         self.hud.update_telemetry(
             tier_name=self._lbl_tier.text(),
-            mode_name=self._combo_mode.currentText()[:16],
+            mode_name=mode_pill[:32],
             assist_name="ACTIVE",
             veto_text="STATUS: INJECTING REAL KEYS",
             bar_vals=[0.2, 0.4, 0.3, 0.5],
@@ -1077,6 +1122,8 @@ class MainWindow(QMainWindow):
     def _force_exit(self) -> None:
         if hasattr(self, "focus_watcher"):
             self.focus_watcher.stop()
+        if hasattr(self, "_scroll_timer"):
+            self._scroll_timer.stop()
         self.tray.hide()
         self.hud.hide()
         QApplication.quit()

@@ -149,124 +149,134 @@ def test_main_window_camera_controls_and_120hz_loop(qapp, monkeypatch):
     win._on_biometric_click()
     assert win.reticle.state == "CLICKED"
 
-def test_asymmetric_wink_scroll_and_zoom_clutch():
-    """Verify asymmetric wink gestures engage clutch and lock cursor movement."""
+def test_zero_click_auto_baseline_and_latch_mechanism():
+    """Verify zero-click auto-enable on launch, latch locking, and opposite-eye unlocking."""
     from host.omniband.tracking.webcam_tracker import TrackerResult, RealWebcamTracker
-    from host.omniband.tracking.optical_calibration import OpticalCalibrationProfile, OpticalCalibrator
 
     scroll_events = []
     zoom_events = []
-    clicks = []
-
-    cal = OpticalCalibrator()
-    cal.profile = OpticalCalibrationProfile(
-        left_wink_thresh=0.18,
-        right_open_floor=0.22,
-        right_wink_thresh=0.18,
-        left_open_floor=0.22,
-        asym_margin=0.04,
-        clutch_min_hold_ms=220.0,
-    )
+    latch_states = []
 
     tracker = RealWebcamTracker(
         on_scroll_clutch=lambda active, delta: scroll_events.append((active, delta)),
         on_zoom_clutch=lambda active, delta, scale: zoom_events.append((active, delta, scale)),
-        on_click=lambda: clicks.append(True),
-        optical_calibrator=cal,
+        on_latch_changed=lambda st: latch_states.append(st),
     )
 
     t0 = 1000.0
-    # 1. Bilateral blink (both eyes low: L=0.10, R=0.10) -> Should NOT trigger Scroll or Zoom clutch!
-    blink_res = TrackerResult(
-        tier="FACEMESH478",
-        face_found=True,
-        nose_tip=(0.5, 0.45),
-        landmarks=[(0.5, 0.45, 0.0)] * 478,
-        ear=0.10,
-        mar=0.05,
-        yaw=0.0,
-        pitch=0.0,
-        timestamp_ms=1000000,
-        left_ear=0.10,
-        right_ear=0.10,
-        eye_dist=0.12,
-    )
-    tracker._process_gestures(blink_res, now=t0)
-    tracker._process_gestures(blink_res, now=t0 + 0.25)
-    assert tracker.active_clutch == "NONE"
-    assert len(scroll_events) == 0
-    assert len(zoom_events) == 0
+    # 1. Zero-Click Auto-Enable: Feed 20 frames of neutral open eyes (L=0.28, R=0.28)
+    for i in range(25):
+        neutral_frame = TrackerResult(
+            tier="FACEMESH478",
+            face_found=True,
+            nose_tip=(0.50, 0.45),
+            landmarks=[(0.50, 0.45, 0.0)] * 478,
+            ear=0.28,
+            mar=0.05,
+            yaw=0.0,
+            pitch=0.0,
+            timestamp_ms=int(t0 * 1000 + i * 16),
+            left_ear=0.28,
+            right_ear=0.28,
+            eye_dist=0.12,
+        )
+        tracker._process_gestures(neutral_frame, now=t0 + i * 0.016)
 
-    # 2. Asymmetric Left Wink (Scroll Clutch: L=0.10, R=0.28) held >= 220 ms
-    left_wink_res = TrackerResult(
+    # Assert auto-baseline was computed without touching any calibration button!
+    assert tracker._auto_calibrated is True
+    assert 0.26 <= tracker.auto_open_ear_L <= 0.30
+    assert 0.26 <= tracker.auto_open_ear_R <= 0.30
+    assert tracker.active_latch == "IDLE"
+
+    # 2. Left-Wink Tap (L=0.10, R=0.28) sustained for >= 140 ms -> LATCH into SCROLL_LOCKED
+    t1 = t0 + 1.0
+    left_wink_frame = TrackerResult(
         tier="FACEMESH478",
         face_found=True,
-        nose_tip=(0.5, 0.40),  # Head tilted up (ny=0.40 < anchor=0.45 -> delta_pitch > 0 -> Scroll Up)
-        landmarks=[(0.5, 0.40, 0.0)] * 478,
+        nose_tip=(0.50, 0.45),
+        landmarks=[(0.50, 0.45, 0.0)] * 478,
         ear=0.19,
         mar=0.05,
         yaw=0.0,
-        pitch=-5.0,
-        timestamp_ms=1000300,
+        pitch=0.0,
+        timestamp_ms=int(t1 * 1000),
         left_ear=0.10,
         right_ear=0.28,
         eye_dist=0.12,
     )
-    # At t = t0 + 0.30: first detection of left wink
-    tracker._process_gestures(left_wink_res, now=t0 + 0.30)
-    assert tracker.active_clutch == "NONE"  # Not yet 220ms
-    # At t = t0 + 0.55: sustained 250ms -> CLUTCH ACTIVE
-    tracker._process_gestures(left_wink_res, now=t0 + 0.55)
-    assert tracker.active_clutch == "SCROLL"
-    assert any(ev[0] is True for ev in scroll_events)
+    # At t1: first detection of Left Wink
+    tracker._process_gestures(left_wink_frame, now=t1)
+    assert tracker.active_latch == "IDLE"  # Not yet 140ms
+    # At t1 + 0.16s: sustained 160ms -> LATCH LOCKS!
+    tracker._process_gestures(left_wink_frame, now=t1 + 0.16)
+    assert tracker.active_latch == "SCROLL_LOCKED"
+    assert "SCROLL_LOCKED" in latch_states
 
-    # While clutch active, velocity must be frozen to 0.0 (cursor locked)
-    tracker._update_velocity(left_wink_res, now=t0 + 0.55, w=640, h=480)
-    vx, vy, _ = tracker.velocity_state
-    assert vx == 0.0 and vy == 0.0
-
-    # Release Left Wink (eyes open again)
-    open_res = TrackerResult(
+    # 3. Both eyes comfortably open + Head Tilted UP: NEVER drops out of SCROLL_LOCKED!
+    scroll_events.clear()
+    head_tilt_up_frame = TrackerResult(
         tier="FACEMESH478",
         face_found=True,
-        nose_tip=(0.5, 0.45),
-        landmarks=[(0.5, 0.45, 0.0)] * 478,
+        nose_tip=(0.50, 0.38),  # Head tilted UP (ny=0.38 < anchor=0.45 -> delta_pitch > 0 -> Scroll Up)
+        landmarks=[(0.50, 0.38, 0.0)] * 478,
         ear=0.28,
         mar=0.05,
         yaw=0.0,
-        pitch=0.0,
-        timestamp_ms=1000700,
-        left_ear=0.28,
+        pitch=-6.0,
+        timestamp_ms=int((t1 + 0.30) * 1000),
+        left_ear=0.28,  # Both eyes fully open!
         right_ear=0.28,
         eye_dist=0.12,
     )
-    tracker._process_gestures(open_res, now=t0 + 0.70)
-    assert tracker.active_clutch == "NONE"
+    for step in range(5):
+        tracker._process_gestures(head_tilt_up_frame, now=t1 + 0.30 + step * 0.016)
 
-    # 3. Asymmetric Right Wink (Doctor Zoom Clutch: R=0.10, L=0.28) held >= 220 ms
-    right_wink_res = TrackerResult(
+    assert tracker.active_latch == "SCROLL_LOCKED"
+    assert len(scroll_events) > 0
+    assert scroll_events[-1][0] is True
+    assert scroll_events[-1][1] > 0.01  # Positive delta_pitch for Scroll UP
+
+    # Velocity must remain locked to 0.0 while in SCROLL_LOCKED
+    tracker._update_velocity(head_tilt_up_frame, now=t1 + 0.30, w=640, h=480)
+    vx, vy, _ = tracker.velocity_state
+    assert vx == 0.0 and vy == 0.0
+
+    # 4. OPPOSITE-EYE UNLOCK: Right-Wink Tap (R=0.10, L=0.28) unlocks SCROLL_LOCKED back to IDLE
+    t2 = t1 + 0.80  # Past 400ms cooldown
+    right_wink_frame = TrackerResult(
         tier="FACEMESH478",
         face_found=True,
-        nose_tip=(0.5, 0.45),
-        landmarks=[(0.5, 0.45, 0.0)] * 478,
+        nose_tip=(0.50, 0.45),
+        landmarks=[(0.50, 0.45, 0.0)] * 478,
         ear=0.19,
         mar=0.05,
         yaw=0.0,
         pitch=0.0,
-        timestamp_ms=1001000,
+        timestamp_ms=int(t2 * 1000),
         left_ear=0.28,
-        right_ear=0.10,
-        eye_dist=0.14,  # Leaning in -> scale_ratio > 1.08 -> Zoom IN
+        right_ear=0.10,  # Right Eye Wink
+        eye_dist=0.12,
     )
-    tracker._process_gestures(right_wink_res, now=t0 + 1.00)
-    assert tracker.active_clutch == "NONE"
-    tracker._process_gestures(right_wink_res, now=t0 + 1.25)
-    assert tracker.active_clutch == "ZOOM"
-    assert any(ev[0] is True for ev in zoom_events)
+    tracker._process_gestures(right_wink_frame, now=t2)
+    tracker._process_gestures(right_wink_frame, now=t2 + 0.16)
+    assert tracker.active_latch == "IDLE"
+    assert "IDLE" in latch_states
 
-    # Release Right Wink
-    tracker._process_gestures(open_res, now=t0 + 1.40)
-    assert tracker.active_clutch == "NONE"
+    # 5. Right-Wink Tap from IDLE -> LATCH INTO ZOOM_LOCKED
+    t3 = t2 + 0.50
+    tracker._process_gestures(right_wink_frame, now=t3)
+    tracker._process_gestures(right_wink_frame, now=t3 + 0.16)
+    assert tracker.active_latch == "ZOOM_LOCKED"
+
+    # Both eyes open in ZOOM_LOCKED: stays locked!
+    tracker._process_gestures(neutral_frame, now=t3 + 0.30)
+    assert tracker.active_latch == "ZOOM_LOCKED"
+
+    # 6. OPPOSITE-EYE UNLOCK: Left-Wink Tap unlocks ZOOM_LOCKED back to IDLE
+    t4 = t3 + 0.80
+    tracker._process_gestures(left_wink_frame, now=t4)
+    tracker._process_gestures(left_wink_frame, now=t4 + 0.16)
+    assert tracker.active_latch == "IDLE"
 
 
 def test_optical_calibration_wizard_computation(tmp_path):

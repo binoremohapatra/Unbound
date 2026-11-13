@@ -157,3 +157,4 @@ class OpticalCalibrator:
         )
         self.save()
         return self.profile
+

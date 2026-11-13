@@ -80,7 +80,7 @@ class SomaticCursorReticle(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setFixedSize(56, 56)
+        self.setFixedSize(260, 60)
 
         # Apply hollow 6x6 px center hole so cursor pixel does not belong to this window
         self._update_hollow_mask()
@@ -98,7 +98,7 @@ class SomaticCursorReticle(QWidget):
         self._timer.start()
 
     def _update_hollow_mask(self) -> None:
-        """Punch a 6x6 pixel hole in the exact center where the cursor hotspot sits.
+        """Punch a 6x6 pixel hole in the exact center hotspot where the cursor sits.
 
         Result: The exact pixel under (cursor_x, cursor_y) physically does NOT belong
         to any Unbound.exe window at the OS window manager level. WindowFromPoint
@@ -109,7 +109,8 @@ class SomaticCursorReticle(QWidget):
         if w <= 0 or h <= 0:
             return
         full_region = QRegion(0, 0, w, h)
-        cx, cy = w // 2, h // 2
+        # Hotspot is at (28, 28)
+        cx, cy = 28, 28
         center_hole = QRegion(cx - 3, cy - 3, 6, 6)
         self.setMask(full_region.subtracted(center_hole))
 
@@ -163,7 +164,7 @@ class SomaticCursorReticle(QWidget):
         if sys.platform == "win32":
             pt = wintypes.POINT()
             ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-            # Center the 56x56 reticle around the cursor hotspot
+            # Align hotspot (28, 28) with cursor position
             self.move(pt.x - 28, pt.y - 28)
             self._style_check_counter += 1
             if self._style_check_counter >= 15:
@@ -181,7 +182,7 @@ class SomaticCursorReticle(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
 
         w, h = self.width(), self.height()
-        cx, cy = w / 2.0, h / 2.0
+        cx, cy = 28.0, 28.0
 
         # State color selection
         if self.state == "CLICKED":
@@ -224,7 +225,7 @@ class SomaticCursorReticle(QWidget):
             span = int(self.dwell_progress * 360 * 16)
             p.drawArc(int(cx - 24), int(cy - 24), 48, 48, 90 * 16, -span)
 
-        # State specific badge/icons
+        # State specific badge/icons & Latched text pills
         if self.state == "DRAG_LOCKED":
             p.setBrush(QBrush(color))
             p.drawRect(int(cx - 3), int(cy - 3), 6, 6)
@@ -232,9 +233,16 @@ class SomaticCursorReticle(QWidget):
             p.setPen(QPen(color))
             p.drawText(int(cx - 12), int(cy + 24), "HOLD")
         elif self.state == "SCROLL_CLUTCH":
-            p.setFont(QFont("Cascadia Code", 7, QFont.Bold))
-            p.setPen(QPen(color))
-            p.drawText(int(cx - 16), int(cy + 24), "SCROLL")
+            # Glow Pill Badge to the right of reticle
+            badge_rect = QRectF(cx + 26, cy - 14, 200, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#00E5FF"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#00E5FF")))
+            p.drawText(badge_rect, Qt.AlignCenter, "🔵 SCROLL LOCKED | Tilt ▲/▼\n😉 Right-Wink to Exit")
+
             p.setFont(QFont("Segoe UI", 9, QFont.Bold))
             if self.scroll_velocity > 0:
                 p.drawText(int(cx - 4), int(cy - 16), "▲")
@@ -244,15 +252,22 @@ class SomaticCursorReticle(QWidget):
                 p.drawText(int(cx - 4), int(cy - 16), "▲")
                 p.drawText(int(cx - 4), int(cy + 24), "▼")
         elif self.state == "ZOOM_CLUTCH":
-            p.setFont(QFont("Cascadia Code", 7, QFont.Bold))
-            p.setPen(QPen(color))
-            p.drawText(int(cx - 18), int(cy + 24), "🔍 ZOOM")
             # Precision doctor crosshair extension
             p.setPen(QPen(color, 2.0))
             p.drawLine(int(cx - 12), int(cy), int(cx - 4), int(cy))
             p.drawLine(int(cx + 4), int(cy), int(cx + 12), int(cy))
             p.drawLine(int(cx), int(cy - 12), int(cx), int(cy - 4))
             p.drawLine(int(cx), int(cy + 4), int(cx), int(cy + 12))
+
+            # Glow Pill Badge to the right of reticle
+            badge_rect = QRectF(cx + 26, cy - 14, 200, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#D500F9"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#D500F9")))
+            p.drawText(badge_rect, Qt.AlignCenter, "🟣 ZOOM LOCKED | Tilt ▲/▼\n😉 Left-Wink to Exit")
         elif self.state == "SCROLLING":
             p.setFont(QFont("Segoe UI", 9, QFont.Bold))
             p.setPen(QPen(color))

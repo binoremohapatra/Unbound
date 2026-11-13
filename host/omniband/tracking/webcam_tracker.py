@@ -381,6 +381,7 @@ class RealWebcamTracker:
         on_drag_toggle: Optional[Callable[[], None]] = None,
         on_scroll_clutch: Optional[Callable[[bool, float], None]] = None,
         on_zoom_clutch: Optional[Callable[[bool, float, float], None]] = None,
+        on_latch_changed: Optional[Callable[[str], None]] = None,
         optical_calibrator: Optional[OpticalCalibrator] = None,
     ) -> None:
         self.camera_id = camera_id
@@ -391,6 +392,7 @@ class RealWebcamTracker:
         self.on_drag_toggle = on_drag_toggle
         self.on_scroll_clutch = on_scroll_clutch
         self.on_zoom_clutch = on_zoom_clutch
+        self.on_latch_changed = on_latch_changed
         self.calibrator = optical_calibrator or OpticalCalibrator()
 
         self._running = False
@@ -436,13 +438,21 @@ class RealWebcamTracker:
         self.current_tier: str = "NO_FACE"
         self.latest_result: Optional[TrackerResult] = None
 
-        # Asymmetric Wink-Clutch State Machine (Scroll & Doctor Zoom)
-        self.active_clutch: str = "NONE"  # "NONE", "SCROLL", "ZOOM"
+        # Asymmetric Wink-Latch State Machine (Opposite-Eye Latch: SCROLL_LOCKED / ZOOM_LOCKED)
+        self.active_latch: str = "IDLE"  # "IDLE", "SCROLL_LOCKED", "ZOOM_LOCKED"
         self._left_wink_start: float = 0.0
         self._right_wink_start: float = 0.0
+        self._latch_locked_time: float = 0.0
         self._pitch_anchor_y: float = 0.45
+        self._filtered_pitch_y: float = 0.45
         self._scale_anchor_dist: float = 0.12
         self._last_zoom_step_time: float = 0.0
+
+        # Auto-Baseline Rolling Tracker (Zero-Click Auto-Enable on Startup)
+        self.auto_open_ear_L: float = 0.28
+        self.auto_open_ear_R: float = 0.28
+        self._auto_baseline_samples: int = 0
+        self._auto_calibrated: bool = False
 
         # Gesture state & adaptive baseline
         self._baseline_ear: float = 0.28
@@ -467,6 +477,24 @@ class RealWebcamTracker:
         # Pipeline state tracking
         self._consecutive_misses: int = 0
         self._last_video_timestamp_ms: int = 0
+
+    @property
+    def active_clutch(self) -> str:
+        """Backward-compatibility alias: maps active_latch to clutch names."""
+        if self.active_latch == "SCROLL_LOCKED":
+            return "SCROLL"
+        elif self.active_latch == "ZOOM_LOCKED":
+            return "ZOOM"
+        return "NONE"
+
+    @active_clutch.setter
+    def active_clutch(self, val: str) -> None:
+        if val == "SCROLL":
+            self.active_latch = "SCROLL_LOCKED"
+        elif val == "ZOOM":
+            self.active_latch = "ZOOM_LOCKED"
+        else:
+            self.active_latch = "IDLE"
 
     @property
     def velocity_state(self) -> Tuple[float, float, bool]:
@@ -885,7 +913,7 @@ class RealWebcamTracker:
             self.filter_dx.reset(now, 0.0)
             self.filter_dy.reset(now, 0.0)
 
-        if now < self._freeze_until or self.active_clutch in ("SCROLL", "ZOOM"):
+        if now < self._freeze_until or self.active_latch != "IDLE":
             vx = 0.0
             vy = 0.0
 
@@ -895,7 +923,7 @@ class RealWebcamTracker:
             self._in_deadzone = in_deadzone
 
     # ------------------------------------------------------------------
-    # Gesture Decoders (Asymmetric Wink-Clutches + Bilateral Blinks)
+    # Gesture Decoders (Opposite-Eye Latch Lock + Auto-Baseline Rolling Tracker)
     # ------------------------------------------------------------------
     def _process_gestures(self, res: TrackerResult, now: float) -> None:
         left_ear = res.left_ear if res.left_ear is not None else 0.28
@@ -905,91 +933,160 @@ class RealWebcamTracker:
         ny = res.nose_tip[1] if res.nose_tip is not None else 0.45
         eye_dist = res.eye_dist if res.eye_dist is not None else 0.12
 
-        prof = self.calibrator.profile
+        # ----------------------------------------------------------------
+        # 1. AUTO-BASELINE ROLLING TRACKER (Zero-Click Auto-Enable on Launch)
+        # ----------------------------------------------------------------
+        # Track live open-eye baseline whenever eyes are open and symmetric
+        if left_ear > 0.20 and right_ear > 0.20 and abs(left_ear - right_ear) < 0.045:
+            if not self._auto_calibrated:
+                self._auto_baseline_samples += 1
+                # Fast convergence over first 20 frames
+                alpha_init = 0.25 if self._auto_baseline_samples < 20 else 0.05
+                self.auto_open_ear_L = (1.0 - alpha_init) * self.auto_open_ear_L + alpha_init * left_ear
+                self.auto_open_ear_R = (1.0 - alpha_init) * self.auto_open_ear_R + alpha_init * right_ear
+                if self._auto_baseline_samples >= 20:
+                    self._auto_calibrated = True
+                    log.info("Auto-baseline optical calibration ready: L=%.2f, R=%.2f",
+                             self.auto_open_ear_L, self.auto_open_ear_R)
+            else:
+                # Slow continuous EMA tracking
+                self.auto_open_ear_L = 0.98 * self.auto_open_ear_L + 0.02 * left_ear
+                self.auto_open_ear_R = 0.98 * self.auto_open_ear_R + 0.02 * right_ear
 
-        # 1. Check for Bilateral Blink (both eyes closed together)
-        # If BOTH eyes are below wink threshold, it is a BLINK, NOT A CLUTCH!
-        is_bilateral_blink = (left_ear < prof.left_wink_thresh) and (right_ear < prof.right_wink_thresh)
+        # Derive dynamic relative wink thresholds
+        # Left Wink Tap: left_ear < auto_open_ear_L * 0.68 while right_ear > auto_open_ear_R * 0.78
+        l_wink_thresh = min(0.24, max(0.14, self.auto_open_ear_L * 0.68))
+        r_open_floor = max(0.16, min(0.28, self.auto_open_ear_R * 0.78))
 
-        # 2. Check for Asymmetric Left Wink (Scroll Clutch: Left closed, Right open)
+        # Right Wink Tap: right_ear < auto_open_ear_R * 0.68 while left_ear > auto_open_ear_L * 0.78
+        r_wink_thresh = min(0.24, max(0.14, self.auto_open_ear_R * 0.68))
+        l_open_floor = max(0.16, min(0.28, self.auto_open_ear_L * 0.78))
+
+        # Bilateral Blink: both eyes closing simultaneously
+        is_bilateral_blink = (left_ear < l_wink_thresh) and (right_ear < r_wink_thresh)
+
+        # Asymmetric Left Wink condition
         is_left_wink = (
-            left_ear < prof.left_wink_thresh
-            and right_ear >= prof.right_open_floor
-            and (right_ear - left_ear) >= prof.asym_margin
+            left_ear < l_wink_thresh
+            and right_ear >= r_open_floor
+            and (right_ear - left_ear) >= 0.04
+            and not is_bilateral_blink
         )
 
-        # 3. Check for Asymmetric Right Wink (Doctor Zoom Clutch: Right closed, Left open)
+        # Asymmetric Right Wink condition
         is_right_wink = (
-            right_ear < prof.right_wink_thresh
-            and left_ear >= prof.left_open_floor
-            and (left_ear - right_ear) >= prof.asym_margin
+            right_ear < r_wink_thresh
+            and left_ear >= l_open_floor
+            and (left_ear - right_ear) >= 0.04
+            and not is_bilateral_blink
         )
 
-        # ====================================================================
-        # CLUTCH STATE MACHINE (Sustained >= 220 ms)
-        # ====================================================================
-        clutch_hold_s = prof.clutch_min_hold_ms / 1000.0
+        # Smooth filtered pitch
+        self._filtered_pitch_y = 0.80 * self._filtered_pitch_y + 0.20 * ny
 
-        if is_left_wink and not is_bilateral_blink:
+        # Track wink tap durations (140 ms to 600 ms)
+        if is_left_wink:
             if self._left_wink_start == 0.0:
                 self._left_wink_start = now
-            elif now - self._left_wink_start >= clutch_hold_s:
-                if self.active_clutch != "SCROLL":
-                    self.active_clutch = "SCROLL"
-                    self._pitch_anchor_y = ny
-                    self._last_gesture_banner = "🔵 SCROLL CLUTCH ENGAGED"
-                    self._gesture_banner_expire = now + 1.5
-                    if self.on_scroll_clutch:
-                        self.on_scroll_clutch(True, 0.0)
-
-                # While scroll clutch held, compute pitch delta
-                # Head Tilted UP = ny < pitch_anchor_y -> delta_pitch > 0 (Scroll UP)
-                delta_pitch = self._pitch_anchor_y - ny
-                if self.on_scroll_clutch:
-                    self.on_scroll_clutch(True, delta_pitch)
         else:
             self._left_wink_start = 0.0
-            if self.active_clutch == "SCROLL":
-                self.active_clutch = "NONE"
-                self._last_gesture_banner = "SCROLL CLUTCH RELEASED"
-                self._gesture_banner_expire = now + 0.8
-                if self.on_scroll_clutch:
-                    self.on_scroll_clutch(False, 0.0)
 
-        if is_right_wink and not is_bilateral_blink:
+        if is_right_wink:
             if self._right_wink_start == 0.0:
                 self._right_wink_start = now
-            elif now - self._right_wink_start >= clutch_hold_s:
-                if self.active_clutch != "ZOOM":
-                    self.active_clutch = "ZOOM"
-                    self._pitch_anchor_y = ny
-                    self._scale_anchor_dist = eye_dist
-                    self._last_gesture_banner = "🟣 DOCTOR ZOOM CLUTCH ENGAGED"
-                    self._gesture_banner_expire = now + 1.5
-                    if self.on_zoom_clutch:
-                        self.on_zoom_clutch(True, 0.0, 1.0)
-
-                delta_pitch = self._pitch_anchor_y - ny
-                scale_ratio = eye_dist / max(1e-4, self._scale_anchor_dist)
-                if self.on_zoom_clutch:
-                    self.on_zoom_clutch(True, delta_pitch, scale_ratio)
         else:
             self._right_wink_start = 0.0
-            if self.active_clutch == "ZOOM":
-                self.active_clutch = "NONE"
-                self._last_gesture_banner = "ZOOM CLUTCH RELEASED"
-                self._gesture_banner_expire = now + 0.8
+
+        # ====================================================================
+        # 2. OPPOSITE-EYE LATCH LOCK STATE MACHINE
+        # ====================================================================
+        min_wink_s = 0.14  # 140 ms minimum sustained wink tap
+
+        # -------------------------------------------------------------
+        # STATE: IDLE (Normal Cursor Movement)
+        # -------------------------------------------------------------
+        if self.active_latch == "IDLE":
+            # Left-Wink Tap -> LATCH INTO SCROLL_LOCKED
+            if is_left_wink and (now - self._left_wink_start >= min_wink_s):
+                self.active_latch = "SCROLL_LOCKED"
+                self._latch_locked_time = now
+                self._pitch_anchor_y = ny
+                self._filtered_pitch_y = ny
+                self._left_wink_start = 0.0
+                self._last_gesture_banner = "🔵 SCROLL LOCKED | Tap Right-Eye to Exit"
+                self._gesture_banner_expire = now + 2.0
+                if self.on_latch_changed:
+                    self.on_latch_changed("SCROLL_LOCKED")
+                if self.on_scroll_clutch:
+                    self.on_scroll_clutch(True, 0.0)
+                return
+
+            # Right-Wink Tap -> LATCH INTO ZOOM_LOCKED
+            elif is_right_wink and (now - self._right_wink_start >= min_wink_s):
+                self.active_latch = "ZOOM_LOCKED"
+                self._latch_locked_time = now
+                self._pitch_anchor_y = ny
+                self._filtered_pitch_y = ny
+                self._scale_anchor_dist = eye_dist
+                self._right_wink_start = 0.0
+                self._last_gesture_banner = "🟣 ZOOM LOCKED | Tap Left-Eye to Exit"
+                self._gesture_banner_expire = now + 2.0
+                if self.on_latch_changed:
+                    self.on_latch_changed("ZOOM_LOCKED")
+                if self.on_zoom_clutch:
+                    self.on_zoom_clutch(True, 0.0, 1.0)
+                return
+
+        # -------------------------------------------------------------
+        # STATE: SCROLL_LOCKED (Both eyes comfortably open! Continuous 60 Hz)
+        # -------------------------------------------------------------
+        elif self.active_latch == "SCROLL_LOCKED":
+            time_since_lock = now - self._latch_locked_time
+            # OPPOSITE-EYE UNLOCK: Right-Wink Tap (>= 140ms) unlocks back to IDLE
+            # Requires 400ms cooldown after entry to prevent instant double-tap exit
+            if time_since_lock >= 0.40 and is_right_wink and (now - self._right_wink_start >= min_wink_s):
+                self.active_latch = "IDLE"
+                self._right_wink_start = 0.0
+                self._last_gesture_banner = "SCROLL UNLOCKED (CURSOR FREE)"
+                self._gesture_banner_expire = now + 1.2
+                if self.on_latch_changed:
+                    self.on_latch_changed("IDLE")
+                if self.on_scroll_clutch:
+                    self.on_scroll_clutch(False, 0.0)
+                return
+
+            # Continuous 60 Hz Smooth Scroll while locked
+            # delta_pitch = pitch_anchor_y - filtered_ny (Head UP -> delta_pitch > 0 -> Scroll UP)
+            delta_pitch = self._pitch_anchor_y - self._filtered_pitch_y
+            if self.on_scroll_clutch:
+                self.on_scroll_clutch(True, delta_pitch)
+            return
+
+        # -------------------------------------------------------------
+        # STATE: ZOOM_LOCKED (Both eyes open! Precision Zoom Steps)
+        # -------------------------------------------------------------
+        elif self.active_latch == "ZOOM_LOCKED":
+            time_since_lock = now - self._latch_locked_time
+            # OPPOSITE-EYE UNLOCK: Left-Wink Tap (>= 140ms) unlocks back to IDLE
+            if time_since_lock >= 0.40 and is_left_wink and (now - self._left_wink_start >= min_wink_s):
+                self.active_latch = "IDLE"
+                self._left_wink_start = 0.0
+                self._last_gesture_banner = "ZOOM UNLOCKED (CURSOR FREE)"
+                self._gesture_banner_expire = now + 1.2
+                if self.on_latch_changed:
+                    self.on_latch_changed("IDLE")
                 if self.on_zoom_clutch:
                     self.on_zoom_clutch(False, 0.0, 1.0)
+                return
 
-        # If a clutch is active, suppress normal clicks
-        if self.active_clutch in ("SCROLL", "ZOOM"):
-            self._blink_active = False
-            self._long_blink_fired = False
+            delta_pitch = self._pitch_anchor_y - self._filtered_pitch_y
+            scale_ratio = eye_dist / max(1e-4, self._scale_anchor_dist)
+            if self.on_zoom_clutch:
+                self.on_zoom_clutch(True, delta_pitch, scale_ratio)
             return
 
         # ====================================================================
-        # NORMAL BILATERAL BLINK & JAW GESTURES
+        # 3. NORMAL BILATERAL BLINK & JAW GESTURES (Only when IDLE)
         # ====================================================================
         self._process_legacy_gestures(ear, mar, now)
 
@@ -1183,10 +1280,10 @@ class RealWebcamTracker:
             l_ear_str = f"{self.current_left_ear:.2f}" if self.current_left_ear is not None else "--"
             r_ear_str = f"{self.current_right_ear:.2f}" if self.current_right_ear is not None else "--"
             mar_str = f"{self.current_mar:.2f}" if self.current_mar is not None else "--"
-            clutch_str = self.active_clutch
+            latch_str = self.active_latch
             cv2.putText(
                 frame_rgb,
-                f"FPS: {self.fps:4.1f} | L:{l_ear_str} R:{r_ear_str} | MAR:{mar_str} | CLUTCH: {clutch_str}",
+                f"FPS: {self.fps:4.1f} | L:{l_ear_str} R:{r_ear_str} | MAR:{mar_str} | LATCH: {latch_str}",
                 (16, h - 16),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (247, 245, 240), 1, cv2.LINE_AA,
             )

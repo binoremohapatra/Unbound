@@ -132,3 +132,4 @@ class TextFocusWatcher:
                         pass
 
             time.sleep(dt)
+

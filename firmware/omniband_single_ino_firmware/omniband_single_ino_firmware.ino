@@ -137,7 +137,7 @@ class BleSecurity : public BLESecurityCallbacks {
 
 void setupBLEHID() {
     Serial.println("[BLE HID] Initializing Native Bluetooth Mouse Engine...");
-    BLEDevice::init("OmniBand Mouse");
+    BLEDevice::init("OmniBand_V2");
     BLEDevice::setSecurityCallbacks(new BleSecurity());
 
     BLEServer* pServer = BLEDevice::createServer();
@@ -161,7 +161,7 @@ void setupBLEHID() {
     pAdvertising->start();
 
     Serial.println("[BLE HID] Native Bluetooth Mouse Advertising ON!");
-    Serial.println("[BLE HID] Device Name in Windows: 'OmniBand Mouse'");
+    Serial.println("[BLE HID] Device Name in Windows: 'OmniBand_V2'");
 }
 
 // ============================================================================

@@ -1,5 +1,6 @@
 // ble_transport.cpp - Native BLE HID Mouse + GATT Telemetry Server for OmniBand V2
 #include "ble_transport.h"
+#include "hw_config.h"
 
 OmniBandBleServer g_ble;
 
@@ -44,8 +45,8 @@ class BleSecurity : public BLESecurityCallbacks {
 };
 
 void OmniBandBleServer::begin() {
-    Serial.println("[BLE] Starting Native Bluetooth HID Mouse 'OmniBand Mouse'...");
-    BLEDevice::init("OmniBand Mouse");
+    Serial.printf("[BLE] Starting Native Bluetooth HID Mouse '%s'...\n", omniband::hw::BT_DEVICE_NAME);
+    BLEDevice::init(omniband::hw::BT_DEVICE_NAME);
     BLEDevice::setSecurityCallbacks(new BleSecurity());
 
     // 1. Create Server
@@ -88,7 +89,7 @@ void OmniBandBleServer::begin() {
     pAdvertising->setMinPreferred(0x12);
     pAdvertising->start();
 
-    Serial.println("[BLE] Native Bluetooth Mouse Advertising ON! (Name: 'OmniBand Mouse')");
+    Serial.printf("[BLE] Native Bluetooth Mouse Advertising ON! (Name: '%s')\n", omniband::hw::BT_DEVICE_NAME);
 }
 
 void OmniBandBleServer::onConnect(BLEServer* pServer) {

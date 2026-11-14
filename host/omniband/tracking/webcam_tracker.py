@@ -585,6 +585,10 @@ class RealWebcamTracker:
             self._thread.join(timeout=1.5)
         log.info("RealWebcamTracker stopped")
 
+    def is_alive(self) -> bool:
+        """Return True if the background tracker thread is running and alive."""
+        return bool(self._running and self._thread and self._thread.is_alive())
+
     # ------------------------------------------------------------------
     # Model Loading
     # ------------------------------------------------------------------

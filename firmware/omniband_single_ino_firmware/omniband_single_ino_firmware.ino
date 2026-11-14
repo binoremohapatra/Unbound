@@ -154,6 +154,8 @@ void setupBLEHID() {
 
     BLESecurity* pSecurity = new BLESecurity();
     pSecurity->setAuthenticationMode(ESP_LE_AUTH_BOND);
+    pSecurity->setCapability(ESP_IO_CAP_NONE);
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->setAppearance(0x03C2); // HID Mouse Icon in Windows!

@@ -76,16 +76,18 @@ void OmniBandBleServer::begin() {
     pChar_->setValue("OmniBand HID Mouse Ready");
     pService->start();
 
-    // 4. Advertising Configuration
+    // 4. Advertising & Security Configuration (No PIN needed - 1-Click Connect)
     BLESecurity* pSecurity = new BLESecurity();
     pSecurity->setAuthenticationMode(ESP_LE_AUTH_BOND);
+    pSecurity->setCapability(ESP_IO_CAP_NONE);
+    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
 
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->setAppearance(0x03C2); // HID Mouse icon in Windows Bluetooth!
     pAdvertising->addServiceUUID(pHid_->hidService()->getUUID());
     pAdvertising->addServiceUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);
+    pAdvertising->setMinPreferred(0x06); // Fast connection parameter
     pAdvertising->setMinPreferred(0x12);
     pAdvertising->start();
 

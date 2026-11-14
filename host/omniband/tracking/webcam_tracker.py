@@ -383,6 +383,7 @@ class RealWebcamTracker:
         on_zoom_clutch: Optional[Callable[[bool, float, float], None]] = None,
         on_latch_changed: Optional[Callable[[str], None]] = None,
         on_universal_exit: Optional[Callable[[], None]] = None,
+        on_head_mouse_toggled: Optional[Callable[[bool], None]] = None,
         optical_calibrator: Optional[OpticalCalibrator] = None,
     ) -> None:
         self.camera_id = camera_id
@@ -395,6 +396,7 @@ class RealWebcamTracker:
         self.on_zoom_clutch = on_zoom_clutch
         self.on_latch_changed = on_latch_changed
         self.on_universal_exit = on_universal_exit
+        self.on_head_mouse_toggled = on_head_mouse_toggled
         self.calibrator = optical_calibrator or OpticalCalibrator()
 
         self._running = False
@@ -1006,9 +1008,26 @@ class RealWebcamTracker:
                 self._bilateral_blink_start = 0.0
                 if 0.06 <= dur <= 0.40:
                     self._blink_timestamps.append(now)
-                    self._blink_timestamps = [t for t in self._blink_timestamps if now - t <= 1.20]
-                    # Check Universal Triple-Blink Exit (3 blinks within 1.20s)
-                    if len(self._blink_timestamps) >= 3:
+                    self._blink_timestamps = [t for t in self._blink_timestamps if now - t <= 1.60]
+                    # Check 4-Blink (Quad-Blink) Toggle for Optical Fallback Head-Mouse
+                    if len(self._blink_timestamps) >= 4:
+                        self._blink_timestamps.clear()
+                        self._last_blink_time = 0.0
+                        self._blink_active = False
+                        self.head_mouse_enabled = not self.head_mouse_enabled
+                        if self.head_mouse_enabled:
+                            self._last_gesture_banner = "👁️x4 OPTICAL FALLBACK: ENABLED"
+                        else:
+                            self._last_gesture_banner = "👁️x4 OPTICAL FALLBACK: DISABLED"
+                        self._gesture_banner_expire = time.time() + 2.0
+                        if getattr(self, "on_head_mouse_toggled", None):
+                            try:
+                                self.on_head_mouse_toggled(self.head_mouse_enabled)
+                            except Exception:
+                                pass
+                        return
+                    # Check Universal Triple-Blink Exit (3 blinks within 1.20s) if in latch mode
+                    elif len(self._blink_timestamps) == 3 and self.active_latch != "IDLE":
                         self._blink_timestamps.clear()
                         self._last_blink_time = 0.0
                         self._blink_active = False

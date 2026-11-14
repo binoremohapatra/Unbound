@@ -66,6 +66,7 @@ class MainWindow(QMainWindow):
     sig_imu_motion = Signal(float, float)
     sig_hw_status = Signal(str)
     sig_hw_gesture = Signal(str)
+    sig_head_mouse_toggled = Signal(bool)
     sig_text_focus = Signal(bool)
     sig_prune_telemetry = Signal(dict)
     sig_prune_output = Signal(str, bool)
@@ -83,12 +84,14 @@ class MainWindow(QMainWindow):
 
         self.sig_biometric_click.connect(self._on_biometric_click)
         self.sig_drag_toggle.connect(self._toggle_drag_lock)
+        self.sig_head_mouse_toggled.connect(self._on_head_mouse_toggled)
         self.sig_text_focus.connect(self._on_text_focus_auto_popup)
 
-        # Child windows & agents
+        # Child windows & agents (kept hidden by default to avoid empty secondary windows)
         self.hud = HudOverlay()
+        self.hud.hide()
         self.reticle = SomaticCursorReticle()
-        self.reticle.show()
+        self.reticle.hide()
 
         self.floating_kb = FloatingKeyboardWindow(
             on_type_fn=self._inject_keyboard_char,
@@ -170,13 +173,13 @@ class MainWindow(QMainWindow):
         btn_toggle_hud.clicked.connect(self._toggle_hud)
 
         self._chk_reticle = QCheckBox("🎯 Tactical Reticle")
-        self._chk_reticle.setChecked(True)
+        self._chk_reticle.setChecked(False)
         self._chk_reticle.toggled.connect(lambda c: self.reticle.setVisible(c))
 
-        self._btn_head_mouse = QPushButton("🖱️ HEAD-MOUSE: ON [F11]")
+        self._btn_head_mouse = QPushButton("🖱️ HEAD-MOUSE: OFF [F11 / 4x Blink]")
         self._btn_head_mouse.setCheckable(True)
-        self._btn_head_mouse.setChecked(True)
-        self._btn_head_mouse.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
+        self._btn_head_mouse.setChecked(False)
+        self._btn_head_mouse.setStyleSheet(f"background-color: {SURFACE_2}; color: {WARM_GRAPHITE}; font-weight: bold;")
         self._btn_head_mouse.clicked.connect(self._toggle_head_mouse)
 
         self._chk_lock_mode = QPushButton("🔓 Auto-Mode")
@@ -255,9 +258,9 @@ class MainWindow(QMainWindow):
         self._btn_calib_optical.setStyleSheet(f"background-color: #00E5FF; color: #111; font-weight: bold;")
         self._btn_calib_optical.clicked.connect(lambda: (self.tabs.setCurrentIndex(5), self.calib.start_optical_calibration()))
 
-        self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse (120Hz Decoupled)")
-        self._chk_head_mouse.setChecked(True)
-        self._chk_head_mouse.toggled.connect(lambda chk: setattr(self.webcam_tracker, "head_mouse_enabled", chk))
+        self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse (120Hz Decoupled) [4x Blink Toggle]")
+        self._chk_head_mouse.setChecked(False)
+        self._chk_head_mouse.toggled.connect(self._on_head_mouse_checkbox_toggled)
 
         # Pointer Speed Slider (0.2x to 2.5x)
         lbl_speed_title = QLabel("Pointer Speed:")
@@ -372,8 +375,11 @@ class MainWindow(QMainWindow):
             on_zoom_clutch=self._on_zoom_clutch_event,
             on_latch_changed=self._on_latch_state_changed,
             on_universal_exit=self._on_universal_exit,
+            on_head_mouse_toggled=lambda en: self.sig_head_mouse_toggled.emit(en),
             optical_calibrator=self.optical_calibrator,
         )
+        # Default head-mouse OFF at startup so optical fallback only enables on 4x Blink or F11!
+        self.webcam_tracker.head_mouse_enabled = False
         self.webcam_tracker.start()
 
         # 60 FPS Consistent Cursor Integration Timer (16 ms tick)
@@ -850,15 +856,36 @@ class MainWindow(QMainWindow):
     def _toggle_head_mouse(self) -> None:
         new_state = not self.webcam_tracker.head_mouse_enabled
         self.webcam_tracker.head_mouse_enabled = new_state
-        self._btn_head_mouse.setChecked(new_state)
-        # Flush and release all keys immediately on head-mouse toggle to prevent stuck keys
+        self._on_head_mouse_toggled(new_state)
+
+    def _on_head_mouse_checkbox_toggled(self, checked: bool) -> None:
+        if self.webcam_tracker.head_mouse_enabled != checked:
+            self.webcam_tracker.head_mouse_enabled = checked
+            self._on_head_mouse_toggled(checked)
+
+    def _on_head_mouse_toggled(self, enabled: bool) -> None:
+        """Handle 4x Quad-Blink gesture or F11 toggle for Optical Fallback Head-Mouse."""
+        self._btn_head_mouse.blockSignals(True)
+        self._btn_head_mouse.setChecked(enabled)
+        self._btn_head_mouse.blockSignals(False)
+
+        if hasattr(self, "_chk_head_mouse"):
+            self._chk_head_mouse.blockSignals(True)
+            self._chk_head_mouse.setChecked(enabled)
+            self._chk_head_mouse.blockSignals(False)
+
         self.gw.release_all("head mouse mode toggle")
-        if new_state:
+        if enabled:
+            self._btn_head_mouse.setText("🖱️ HEAD-MOUSE: ON [F11 / 4x Blink]")
             self._btn_head_mouse.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
-            self.status.showMessage("🖱️ HEAD-MOUSE ACTIVE: Moving head moves cursor | A/D scancodes blocked", 3000)
+            self.status.showMessage("👁️x4 Quad-Blink: Optical Fallback Head-Mouse ENABLED", 3500)
+            self.calib.append_log("GESTURE: 👁️x4 Quad-Blink -> Optical Fallback Head-Mouse ENABLED")
         else:
-            self._btn_head_mouse.setStyleSheet("")
-            self.status.showMessage("HEAD-MOUSE PAUSED", 2000)
+            self._btn_head_mouse.setText("🖱️ HEAD-MOUSE: OFF [F11 / 4x Blink]")
+            self._btn_head_mouse.setStyleSheet(f"background-color: {SURFACE_2}; color: {WARM_GRAPHITE}; font-weight: bold;")
+            self.status.showMessage("👁️x4 Quad-Blink: Optical Fallback Head-Mouse DISABLED", 3500)
+            self.calib.append_log("GESTURE: 👁️x4 Quad-Blink -> Optical Fallback Head-Mouse DISABLED")
+        self._update_tier_badge()
 
     def _toggle_drag_lock(self) -> None:
         """Toggle Left Mouse Button drag latch."""

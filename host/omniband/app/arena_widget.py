@@ -111,7 +111,7 @@ class ArenaWidget(QWidget):
             key_s=self._key_s,
             handbrake=self._key_space,
         )
-        state = self._vehicle.to_vehicle_state()
+        state = self._vehicle.to_vehicle_state(time.perf_counter())
 
         # Write to shared in-memory slot for Co-Pilot
         ARENA_SLOT.write_state(state)

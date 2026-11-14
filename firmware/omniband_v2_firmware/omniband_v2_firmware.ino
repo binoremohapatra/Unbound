@@ -23,6 +23,7 @@
 #include "mpu_front.h"
 #include "config_store.h"
 #include "link.h"
+#include "wifi_transport.h"
 #include "oled_ui.h"
 #include "cal.h"
 
@@ -196,11 +197,24 @@ static void dsp_task(void*) {
                 portEXIT_CRITICAL(&g_state_mux);
             }
 
-            // 25 Hz BLE Notification (every 40 ms window = 20 samples @ 500 Hz)
-            if (++ble_scnt >= 20) {
+            // ~62.5 Hz Wi-Fi UDP & 25 Hz BLE Stream (every 8 samples @ 500 Hz = 16 ms)
+            if (++ble_scnt >= 8) {
                 ble_scnt = 0;
                 float dx = 0.0f, dy = 0.0f;
                 g_mpu.read(dx, dy);
+
+                // 1. Ultra-Low-Latency Wi-Fi UDP Broadcast to 255.255.255.255:4210
+                g_wifi.send_telemetry(
+                    (int32_t)ble_env_peak[0],
+                    (int32_t)ble_env_peak[1],
+                    (int32_t)ble_env_peak[2],
+                    (int32_t)ble_env_peak[3],
+                    (uint32_t)esp_timer_get_time(),
+                    dx,
+                    dy
+                );
+
+                // 2. Fallback BLE stream
                 if (g_ble.is_connected() && (abs(dx) > 0.01f || abs(dy) > 0.01f)) {
                     g_ble.mouse_move((int8_t)dx, (int8_t)dy, 0);
                 }
@@ -292,29 +306,37 @@ void loop() {
             if (e.kind == omniband::OUT_EVT_DOWN) {
                 if (e.ch == 4) {
                     // CH4 Press -> Mouse Left Click
+                    g_wifi.mouse_click(MOUSE_BTN_LEFT);
                     g_ble.mouse_click(MOUSE_BTN_LEFT);
                 } else if (e.ch == 2 || e.ch == 3) {
                     // Eyebrow Raise (CH2/CH3) -> Mouse Scroll UP
+                    g_wifi.mouse_scroll(3);
                     g_ble.mouse_scroll(3);
                 } else if (e.ch == 1) {
                     // Left Temple Clench -> Middle Click
+                    g_wifi.mouse_click(MOUSE_BTN_MIDDLE);
                     g_ble.mouse_click(MOUSE_BTN_MIDDLE);
                 }
             } else if (e.kind == omniband::OUT_GES) {
                 if (e.g == omniband::G_SINGLE) {
                     // Single Clench -> Left Click
+                    g_wifi.mouse_click(MOUSE_BTN_LEFT);
                     g_ble.mouse_click(MOUSE_BTN_LEFT);
                 } else if (e.g == omniband::G_DOUBLE) {
                     // Double Clench / Fast Tap -> Right Click
+                    g_wifi.mouse_click(MOUSE_BTN_RIGHT);
                     g_ble.mouse_click(MOUSE_BTN_RIGHT);
                 } else if (e.g == omniband::G_LONG) {
                     // Long Hold Clench -> Drag Lock Toggle
+                    g_wifi.mouse_toggle_drag();
                     g_ble.mouse_toggle_drag();
                 } else if (e.g == omniband::G_TRIPLE) {
                     // Triple Clench -> Middle Click
+                    g_wifi.mouse_click(MOUSE_BTN_MIDDLE);
                     g_ble.mouse_click(MOUSE_BTN_MIDDLE);
                 }
 
+                g_wifi.notify_gesture(ges_name((int)e.g));
                 if (e.g == omniband::G_MODE_SET) g_link.send_mode_set(e.m);
                 else g_link.send_ges(e);
             }

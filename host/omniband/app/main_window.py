@@ -157,8 +157,8 @@ class MainWindow(QMainWindow):
         self._lbl_tier.setFont(QFont("Cascadia Code", 10, QFont.Bold))
         self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
-        self._btn_scan_ble = QPushButton("🔄 Auto-Connecting Hardware...")
-        self._btn_scan_ble.setToolTip("Hardware auto-connects automatically (USB/BLE). Click to force re-scan or toggle link.")
+        self._btn_scan_ble = QPushButton("🔄 Auto-Connecting (Wi-Fi/USB)...")
+        self._btn_scan_ble.setToolTip("Zero-config Wi-Fi UDP (Port 4210) & USB auto-connect. Connect to OmniBand_WiFi (12345678) or plug USB.")
         self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; padding: 4px 10px; border-radius: 4px; border: 1px solid {BURNT_ORANGE};")
         self._btn_scan_ble.clicked.connect(self._on_scan_ble_clicked)
 
@@ -436,7 +436,7 @@ class MainWindow(QMainWindow):
         self.sig_hw_status.connect(self._on_hw_status_event)
         self.sig_hw_gesture.connect(self._on_hardware_gesture_event)
 
-        # Unified Hardware Transport Manager for OmniBand Headband
+        # Unified Hardware Transport Manager for OmniBand Headband (USB / BLE)
         self.ble_client = OmniBandBleClient(
             calibrator=self.calibrator,
             on_somatic_frame=lambda ch, act, seq: self.sig_ble_frame.emit(ch, act, seq),
@@ -449,6 +449,19 @@ class MainWindow(QMainWindow):
         self.ble_client.start()
         # Zero-Click Auto-Connect: kick off immediate hardware search on app startup
         QTimer.singleShot(250, self.ble_client.trigger_hybrid_connect)
+
+        # Zero-Config Ultra-Low-Latency Wi-Fi UDP Hardware Receiver (Port 4210)
+        from host.omniband.wifi_transport import OmniBandWifiClient
+        self.wifi_client = OmniBandWifiClient(
+            calibrator=self.calibrator,
+            on_somatic_frame=lambda ch, act, seq: self.sig_ble_frame.emit(ch, act, seq),
+            on_connection_change=self._on_wifi_connection_event,
+            on_metrics_update=lambda rate: self.sig_ble_metrics.emit(-40, rate),
+            on_imu_motion=lambda dx, dy: self.sig_imu_motion.emit(dx, dy),
+            on_hardware_gesture=lambda g: self.sig_hw_gesture.emit(g),
+            on_status_change=lambda msg: self.sig_hw_status.emit(msg),
+        )
+        self.wifi_client.start()
 
     def _on_webcam_frame(self, frame_rgb) -> None:
         try:
@@ -1199,24 +1212,49 @@ class MainWindow(QMainWindow):
             bar_vals=[0.2, 0.4, 0.3, 0.5]
         )
 
+    def _on_wifi_connection_event(self, connected: bool, message: str) -> None:
+        if connected:
+            self._lbl_ble_metrics.setText("🟢 Wi-Fi UDP: Connected")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self._btn_scan_ble.setText("🟢 HARDWARE (Wi-Fi UDP)")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {STATUS_OK}; font-weight: bold; border: 1px solid {STATUS_OK}; padding: 4px 10px; border-radius: 4px;")
+            self.status.showMessage("🟢 CONNECTED: HARDWARE (Wi-Fi UDP)", 4000)
+            self.calib.append_log(f"HARDWARE CONNECTED: {message}")
+            self._update_tier_badge()
+        else:
+            if not self.ble_client.is_connected:
+                self._btn_scan_ble.setText("🔄 Auto-Connecting (Wi-Fi/USB)...")
+                self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+                self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
+                self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+                self.status.showMessage(f"Wi-Fi UDP stream paused ({message}). Auto-connecting in background...", 3000)
+                self.calib.append_log(f"HARDWARE DISCONNECTED: {message}")
+                self.gw.release_all("Hardware disconnect failsafe")
+                self._update_tier_badge()
+
     def _on_scan_ble_clicked(self) -> None:
-        if self.ble_client.is_connected:
+        wifi_connected = hasattr(self, "wifi_client") and self.wifi_client.is_connected
+        if wifi_connected or self.ble_client.is_connected:
             self.calib.append_log("Operator requested disconnect & re-scan.")
+            if hasattr(self, "wifi_client"):
+                self.wifi_client.trigger_ping()
             self.ble_client.stop()
             self.ble_client.start()
-            self._btn_scan_ble.setText("🔄 Auto-Connecting Hardware...")
+            self._btn_scan_ble.setText("🔄 Auto-Connecting (Wi-Fi/USB)...")
             self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
             self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
-            self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
             self.status.showMessage("Disconnected. Auto-reconnecting in background...", 3000)
             return
 
         self._btn_scan_ble.setText("🔄 Scanning Hardware...")
         self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
         self._lbl_ble_metrics.setText("Hardware: Scanning...")
-        self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-        self.calib.append_log("Operator triggered Hardware Re-scan (BLE / USB).")
-        self.status.showMessage("Scanning USB COM ports & BLE...", 3000)
+        self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+        self.calib.append_log("Operator triggered Hardware Re-scan (Wi-Fi UDP / USB).")
+        self.status.showMessage("Listening on Wi-Fi UDP Port 4210 & scanning USB...", 3000)
+        if hasattr(self, "wifi_client"):
+            self.wifi_client.trigger_ping()
         self.ble_client.trigger_hybrid_connect()
 
     def _on_hw_status_event(self, status_msg: str) -> None:
@@ -1296,6 +1334,9 @@ class MainWindow(QMainWindow):
             self._update_tier_badge()
 
     def _on_ble_connection_event(self, connected: bool, message: str) -> None:
+        if hasattr(self, "wifi_client") and self.wifi_client.is_connected:
+            return  # Wi-Fi UDP stream is active primary
+
         transport = getattr(self.ble_client, "transport_type", "BLE")
         if connected:
             self._btn_scan_ble.setText(f"🟢 Hardware: Connected ({transport})")
@@ -1307,7 +1348,7 @@ class MainWindow(QMainWindow):
             self.calib.append_log(f"HARDWARE CONNECTED: {message}")
             self._update_tier_badge()
         else:
-            self._btn_scan_ble.setText("🔄 Auto-Connecting Hardware...")
+            self._btn_scan_ble.setText("🔄 Auto-Connecting (Wi-Fi/USB)...")
             self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
             self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
             self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
@@ -1319,6 +1360,11 @@ class MainWindow(QMainWindow):
         self.calib.set_ble_metrics(connected, message, self.ble_client.rssi, self.ble_client.packet_rate)
 
     def _on_ble_metrics_event(self, rssi: int, rate: float) -> None:
+        if hasattr(self, "wifi_client") and self.wifi_client.is_connected:
+            self._lbl_ble_metrics.setText(f"Wi-Fi UDP: {rate:.1f} pkt/s | Port 4210")
+            self.calib.set_ble_metrics(True, "OmniBand-Wi-Fi-UDP", rssi, rate)
+            return
+
         transport = getattr(self.ble_client, "transport_type", "BLE")
         if transport == "USB":
             self._lbl_ble_metrics.setText(f"USB: {rate:.1f} pkt/s")

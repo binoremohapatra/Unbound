@@ -54,7 +54,7 @@ def install():
 
     # Desktop shortcut
     desktop_lnk = desktop / "Unbound.lnk"
-    if create_shortcut(exe_path, desktop_lnk, "Unbound Somatic Operating System & Game Mod Daemon"):
+    if create_shortcut(exe_path, desktop_lnk, "Unbound Somatic Operating System & Game Mod Daemon", args="--gui"):
         print(f"SUCCESS: Created Desktop Shortcut -> {desktop_lnk}")
     else:
         print(f"WARNING: Could not create shortcut on Desktop")
@@ -62,7 +62,7 @@ def install():
     # Start Menu shortcut
     if start_menu and start_menu.exists():
         start_lnk = start_menu / "Unbound.lnk"
-        if create_shortcut(exe_path, start_lnk, "Unbound Somatic Operating System"):
+        if create_shortcut(exe_path, start_lnk, "Unbound Somatic Operating System", args="--gui"):
             print(f"SUCCESS: Created Start Menu Shortcut -> {start_lnk}")
 
     print("\n[OK] Setup complete! You can now double-click 'Unbound' on your Desktop.")

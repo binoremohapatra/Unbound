@@ -23,6 +23,9 @@ constexpr uint32_t OLED_I2C_FREQ_HZ = 400000;
 constexpr uint32_t BAUD_BOOT = constants::kLinkBaudBoot;
 constexpr uint32_t BAUD_FAST = constants::kLinkBaudFast;
 constexpr const char* BT_DEVICE_NAME = "OmniBand";
+constexpr const char* WIFI_AP_SSID = "OmniBand_WiFi";
+constexpr const char* WIFI_AP_PASS = "12345678";
+constexpr uint16_t WIFI_UDP_PORT = 4210;
 
 // Timing & FreeRTOS validation
 static_assert(constants::kTimingDspHz == 500, "DSP sampling rate must be 500 Hz");

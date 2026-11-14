@@ -1,5 +1,6 @@
 // link.cpp - NDJSON link layer. See protocol/PROTOCOL.md for wire format.
 #include "link.h"
+#include "wifi_transport.h"
 #include "ble_transport.h"
 #include <BluetoothSerial.h>
 #include <Preferences.h>
@@ -47,20 +48,23 @@ void Link::begin(uint32_t baud) {
     baud_ = baud;
     Serial.begin(baud);
     Serial.setTimeout(0);
+    g_wifi.begin();
     g_ble.begin();
-    // Note: Classic BluetoothSerial is disabled so it doesn't conflict
-    // with BLE controller/radio resources on ESP32.
-    // if (SerialBT.begin("Omniband")) {
-    //     SerialBT.setTimeout(0);
-    // }
     hello_sent_ = false;
 }
 
+void Link::send_wifi_somatic(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, float dx, float dy) {
+    g_wifi.send_telemetry(ch1, ch2, ch3, ch4, seq_++, dx, dy);
+}
+
 void Link::send_ble_somatic(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, float dx, float dy) {
+    // Send over both Wi-Fi UDP and BLE for zero-latency instant delivery
+    g_wifi.send_telemetry(ch1, ch2, ch3, ch4, seq_, dx, dy);
     g_ble.notify_frame(ch1, ch2, ch3, ch4, seq_++, dx, dy);
 }
 
 void Link::send_ble_click() {
+    g_wifi.mouse_click(MOUSE_BTN_LEFT);
     g_ble.notify_click();
     Serial.println("\n⚡ [EDGE DSP] >>> ON-DEVICE JAW CLENCH -> LEFT CLICK! <<<");
 }
@@ -75,6 +79,7 @@ void Link::set_baud(uint32_t baud) {
 void Link::tx(const String& line) {
     Serial.println(line);
     if (SerialBT.hasClient()) SerialBT.println(line);
+    g_wifi.notify_line(line + "\n");
     if (g_ble.is_connected()) g_ble.notify_line(line + "\n");
 }
 
@@ -307,6 +312,7 @@ void Link::poll() {
         rx.trim();
         if (rx.length() > 0) handle_line(rx, "ble");
     }
+    g_wifi.poll();
 
     int64_t now = (int64_t)(esp_timer_get_time() / 1000);
     SharedState st; state_copy(st);

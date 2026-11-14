@@ -157,13 +157,14 @@ class MainWindow(QMainWindow):
         self._lbl_tier.setFont(QFont("Cascadia Code", 10, QFont.Bold))
         self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
-        self._btn_scan_ble = QPushButton("🔵 Connect Hardware (BLE / USB)")
-        self._btn_scan_ble.setToolTip("Auto-detects USB COM port first, then scans BLE for OmniBand / ESP32")
+        self._btn_scan_ble = QPushButton("🔄 Auto-Connecting Hardware...")
+        self._btn_scan_ble.setToolTip("Hardware auto-connects automatically (USB/BLE). Click to force re-scan or toggle link.")
+        self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; padding: 4px 10px; border-radius: 4px; border: 1px solid {BURNT_ORANGE};")
         self._btn_scan_ble.clicked.connect(self._on_scan_ble_clicked)
 
-        self._lbl_ble_metrics = QLabel("Hardware: Disconnected")
-        self._lbl_ble_metrics.setFont(QFont("Cascadia Code", 9))
-        self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+        self._lbl_ble_metrics = QLabel("Hardware: Auto-Connecting...")
+        self._lbl_ble_metrics.setFont(QFont("Cascadia Code", 9, QFont.Bold))
+        self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
 
         self._btn_microsoft_kb = QPushButton("⌨️ MICROSOFT KEYBOARD")
         self._btn_microsoft_kb.setStyleSheet(f"background: {BURNT_ORANGE}; color: #111; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
@@ -446,6 +447,8 @@ class MainWindow(QMainWindow):
             on_status_change=lambda msg: self.sig_hw_status.emit(msg),
         )
         self.ble_client.start()
+        # Zero-Click Auto-Connect: kick off immediate hardware search on app startup
+        QTimer.singleShot(250, self.ble_client.trigger_hybrid_connect)
 
     def _on_webcam_frame(self, frame_rgb) -> None:
         try:
@@ -1197,13 +1200,34 @@ class MainWindow(QMainWindow):
         )
 
     def _on_scan_ble_clicked(self) -> None:
-        self.calib.append_log("Operator triggered Hybrid Hardware Connect (BLE / USB).")
+        if self.ble_client.is_connected:
+            self.calib.append_log("Operator requested disconnect & re-scan.")
+            self.ble_client.stop()
+            self.ble_client.start()
+            self._btn_scan_ble.setText("🔄 Auto-Connecting Hardware...")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+            self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self.status.showMessage("Disconnected. Auto-reconnecting in background...", 3000)
+            return
+
+        self._btn_scan_ble.setText("🔄 Scanning Hardware...")
+        self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+        self._lbl_ble_metrics.setText("Hardware: Scanning...")
+        self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+        self.calib.append_log("Operator triggered Hardware Re-scan (BLE / USB).")
         self.status.showMessage("Scanning USB COM ports & BLE...", 3000)
         self.ble_client.trigger_hybrid_connect()
 
     def _on_hw_status_event(self, status_msg: str) -> None:
         self.status.showMessage(status_msg, 3000)
         self.calib.append_log(f"HW: {status_msg}")
+        if not self.ble_client.is_connected:
+            s_lower = status_msg.lower()
+            if "found" in s_lower or "connecting" in s_lower:
+                self._lbl_ble_metrics.setText("Hardware: Connecting...")
+            elif "scanning" in s_lower:
+                self._lbl_ble_metrics.setText("Hardware: Auto-Scanning...")
 
     def _on_hardware_gesture_event(self, gesture: str) -> None:
         """Route on-device Edge DSP detected gestures directly to OS actions."""
@@ -1274,22 +1298,21 @@ class MainWindow(QMainWindow):
     def _on_ble_connection_event(self, connected: bool, message: str) -> None:
         transport = getattr(self.ble_client, "transport_type", "BLE")
         if connected:
-            if transport == "USB":
-                self._lbl_ble_metrics.setText("🟢 USB: Connected")
-                self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-                self.status.showMessage(f"🟢 {message}", 4000)
-                self.calib.append_log(f"HARDWARE CONNECTED: {message}")
-            else:
-                self._lbl_ble_metrics.setText("🟢 BLE: Connected")
-                self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-                self.status.showMessage(f"🔵 {message}", 4000)
-                self.calib.append_log(f"HARDWARE CONNECTED: {message}")
+            self._btn_scan_ble.setText(f"🟢 Hardware: Connected ({transport})")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {STATUS_OK}; font-weight: bold; border: 1px solid {STATUS_OK}; padding: 4px 10px; border-radius: 4px;")
+            self._lbl_ble_metrics.setText(f"🟢 {transport}: Connected")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            prefix = "🟢" if transport == "USB" else "🔵"
+            self.status.showMessage(f"{prefix} {message}", 4000)
+            self.calib.append_log(f"HARDWARE CONNECTED: {message}")
             self._update_tier_badge()
         else:
-            self._lbl_ble_metrics.setText("Hardware: Disconnected")
-            self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-            self.status.showMessage(f"Hardware Disconnected ({message}).", 3000)
-            self.calib.append_log(f"HARDWARE DISCONNECTED: {message}")
+            self._btn_scan_ble.setText("🔄 Auto-Connecting Hardware...")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+            self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self.status.showMessage(f"Hardware Disconnected ({message}). Auto-connecting in background...", 3000)
+            self.calib.append_log(f"HARDWARE DISCONNECTED: {message} -> Auto-reconnecting in background")
             # Safe handoff: release all inputs within < 150ms grace
             self.gw.release_all("Hardware disconnect failsafe")
             self._update_tier_badge()

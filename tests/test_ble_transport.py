@@ -232,3 +232,64 @@ def test_hardware_transport_manager_payload_routing():
     assert len(imu_motions) == 1
     assert imu_motions[0] == (10.0, -5.0)
     assert somatic_frames[0][2] == 100
+
+
+def test_auto_connect_usb_step_when_no_port():
+    """Verify _sync_check_and_connect_usb returns False cleanly when no port detected."""
+    client = OmniBandBleClient()
+    with patch("host.omniband.ble_transport.scan_usb_serial_ports", return_value=[]):
+        connected = client._sync_check_and_connect_usb()
+        assert connected is False
+        assert client.is_connected is False
+
+
+def test_auto_connect_usb_step_when_port_available():
+    """Verify _sync_check_and_connect_usb initializes SerialTransportWorker when high-score port found."""
+    status_events = []
+    client = OmniBandBleClient(
+        on_connection_change=lambda conn, msg: status_events.append((conn, msg))
+    )
+
+    mock_ports = [("COM3", "CP2102 USB to UART Bridge", 100)]
+    mock_serial_worker = MagicMock()
+    mock_serial_worker.is_connected = True
+
+    with patch("host.omniband.ble_transport.scan_usb_serial_ports", return_value=mock_ports), \
+         patch("host.omniband.ble_transport.SERIAL_AVAILABLE", True), \
+         patch("host.omniband.ble_transport.SerialTransportWorker", return_value=mock_serial_worker):
+        connected = client._sync_check_and_connect_usb()
+        assert connected is True
+        assert client.is_connected is True
+        assert client.transport_type == "USB"
+        assert len(status_events) == 1
+        assert status_events[0][0] is True
+        assert "COM3" in status_events[0][1]
+
+
+def test_auto_connect_worker_executes_hybrid_stages():
+    """Verify _worker_coroutine invokes USB check and BLE cycle when disconnected."""
+    import asyncio
+
+    async def _async_test():
+        client = OmniBandBleClient()
+        client._running = True
+
+        call_log = []
+
+        async def mock_usb_check():
+            call_log.append("usb_check")
+            return False
+
+        async def mock_ble_cycle():
+            call_log.append("ble_cycle")
+            # stop running after 1 cycle to terminate loop
+            client._running = False
+
+        client._async_check_and_connect_usb = mock_usb_check
+        client._do_ble_connect_cycle = mock_ble_cycle
+
+        await client._worker_coroutine()
+        assert call_log == ["usb_check", "ble_cycle"]
+
+    asyncio.run(_async_test())
+

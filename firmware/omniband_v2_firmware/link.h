@@ -43,6 +43,7 @@ public:
     // events drained from the DSP queue by the caller task
     void flush_events(omniband::EventQueue& q);
     void send_tele(const SharedState& st);
+    void send_ble_somatic(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4);
     uint32_t rx_count() const { return rx_lines_; }
     uint32_t drop_count() const { return drop_lines_; }
     uint32_t cmd_rate_limited() const { return rate_limited_; }

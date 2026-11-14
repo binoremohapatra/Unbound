@@ -83,6 +83,12 @@ class HudOverlay(QWidget):
         self._lbl_held_keys.setStyleSheet(f"color: {BURNT_ORANGE};")
         layout.addWidget(self._lbl_held_keys)
 
+        # Biometric Optical Status Row (L-EAR, R-EAR, PITCH, ACTIVE CLUTCH)
+        self._lbl_optical = QLabel("OPTICAL: L:0.28 R:0.28 | PITCH: 0.0° | CLUTCH: NONE")
+        self._lbl_optical.setFont(QFont("Cascadia Code", 8, QFont.Bold))
+        self._lbl_optical.setStyleSheet(f"color: #00E5FF;")
+        layout.addWidget(self._lbl_optical)
+
         # 4 Mini Piezo Bars
         bars_row = QHBoxLayout()
         self._bars = []
@@ -124,7 +130,17 @@ class HudOverlay(QWidget):
         except Exception:
             pass
 
-    def update_telemetry(self, tier_name: str, mode_name: str, assist_name: str, veto_text: str, bar_vals: list[float], target_win: str = "", held_keys: list[str] | None = None) -> None:
+    def update_telemetry(
+        self,
+        tier_name: str,
+        mode_name: str,
+        assist_name: str,
+        veto_text: str,
+        bar_vals: list[float],
+        target_win: str = "",
+        held_keys: list[str] | None = None,
+        optical_status: str = "",
+    ) -> None:
         self._lbl_tier.setText(tier_name)
         self._lbl_mode.setText(mode_name)
         self._lbl_assist.setText(f"CO-PILOT: {assist_name}")
@@ -133,6 +149,8 @@ class HudOverlay(QWidget):
             self._lbl_target.setText(f"TARGET: {target_win[:28]}")
         if held_keys is not None:
             self._lbl_held_keys.setText(f"LIVE OS KEYS: [{', '.join(held_keys)}]")
+        if optical_status:
+            self._lbl_optical.setText(optical_status)
         for i, val in enumerate(bar_vals[:4]):
             self._bars[i].setValue(int(val * 100))
 

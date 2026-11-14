@@ -22,13 +22,48 @@ import time
 
 from PySide6.QtWidgets import QWidget
 from PySide6.QtCore import Qt, QTimer, QRectF
-from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont
+from PySide6.QtWidgets import QWidget
+from PySide6.QtCore import Qt, QTimer, QRectF
+from PySide6.QtGui import QPainter, QColor, QPen, QBrush, QFont, QRegion
 
 GWL_EXSTYLE = -20
 WS_EX_TRANSPARENT = 0x00000020
 WS_EX_LAYERED = 0x00080000
 WS_EX_TOPMOST = 0x00000008
+WS_EX_TOOLWINDOW = 0x00000080
 WS_EX_NOACTIVATE = 0x08000000
+
+
+def enforce_click_through_hwnd(hwnd: int) -> None:
+    """Force Win32 extended click-through styles so OS hit-tests never trap on overlay."""
+    if sys.platform != "win32" or not hwnd:
+        return
+    try:
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
+        target = (
+            style
+            | WS_EX_LAYERED
+            | WS_EX_TRANSPARENT
+            | WS_EX_TOPMOST
+            | WS_EX_TOOLWINDOW
+            | WS_EX_NOACTIVATE
+        )
+        if (style & (WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE)) != (
+            WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_NOACTIVATE
+        ):
+            user32.SetWindowLongW(hwnd, GWL_EXSTYLE, target)
+            SWP_NOSIZE = 0x0001
+            SWP_NOMOVE = 0x0002
+            SWP_NOZORDER = 0x0004
+            SWP_FRAMECHANGED = 0x0020
+            SWP_NOACTIVATE = 0x0010
+            user32.SetWindowPos(
+                hwnd, 0, 0, 0, 0, 0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_FRAMECHANGED | SWP_NOACTIVATE
+            )
+    except Exception:
+        pass
 
 
 class SomaticCursorReticle(QWidget):
@@ -45,11 +80,16 @@ class SomaticCursorReticle(QWidget):
         )
         self.setAttribute(Qt.WA_TranslucentBackground, True)
         self.setAttribute(Qt.WA_ShowWithoutActivating, True)
-        self.setFixedSize(56, 56)
+        self.setFixedSize(290, 60)
 
-        self.state = "NORMAL"  # NORMAL, CLICKED, DRAG_LOCKED, SCROLLING
+        # Apply hollow 6x6 px center hole so cursor pixel does not belong to this window
+        self._update_hollow_mask()
+        self._style_check_counter = 0
+
+        self.state = "NORMAL"  # NORMAL, CLICKED, DRAG_LOCKED, SCROLLING, SCROLL_CLUTCH, ZOOM_CLUTCH
         self.dwell_progress = 0.0  # 0.0 to 1.0
         self._click_expire = 0.0
+        self.scroll_velocity: float = 0.0
 
         # 120 Hz Cursor tracking timer (8ms)
         self._timer = QTimer(self)
@@ -57,28 +97,41 @@ class SomaticCursorReticle(QWidget):
         self._timer.timeout.connect(self._sync_position)
         self._timer.start()
 
+    def _update_hollow_mask(self) -> None:
+        """Punch a 6x6 pixel hole in the exact center hotspot where the cursor sits.
+
+        Result: The exact pixel under (cursor_x, cursor_y) physically does NOT belong
+        to any Unbound.exe window at the OS window manager level. WindowFromPoint
+        is guaranteed to hit Shell_TrayWnd (Taskbar), StartMenuExperienceHost,
+        or the target desktop app!
+        """
+        w, h = self.width(), self.height()
+        if w <= 0 or h <= 0:
+            return
+        full_region = QRegion(0, 0, w, h)
+        # Hotspot is at (28, 28)
+        cx, cy = 28, 28
+        center_hole = QRegion(cx - 3, cy - 3, 6, 6)
+        self.setMask(full_region.subtracted(center_hole))
+
     def showEvent(self, event) -> None:  # noqa: N802
         super().showEvent(event)
+        self._update_hollow_mask()
         self._apply_win32_styles()
 
     def _apply_win32_styles(self) -> None:
         if sys.platform != "win32":
             return
-        try:
-            hwnd = int(self.winId())
-            user32 = ctypes.windll.user32
-            style = user32.GetWindowLongW(hwnd, GWL_EXSTYLE)
-            user32.SetWindowLongW(
-                hwnd,
-                GWL_EXSTYLE,
-                style | WS_EX_TRANSPARENT | WS_EX_LAYERED | WS_EX_TOPMOST | WS_EX_NOACTIVATE
-            )
-        except Exception:
-            pass
+        enforce_click_through_hwnd(int(self.winId()))
 
     def trigger_click_flash(self) -> None:
         self.state = "CLICKED"
         self._click_expire = time.perf_counter() + 0.20  # 200 ms flash
+        self.update()
+
+    def trigger_unlock_flash(self) -> None:
+        self.state = "UNLOCKED_FLASH"
+        self._click_expire = time.perf_counter() + 0.40  # 400 ms flash
         self.update()
 
     def set_drag_locked(self, locked: bool) -> None:
@@ -86,9 +139,31 @@ class SomaticCursorReticle(QWidget):
         self.update()
 
     def set_scrolling(self, scrolling: bool) -> None:
-        if self.state != "DRAG_LOCKED":
+        if self.state not in ("DRAG_LOCKED", "SCROLL_CLUTCH", "ZOOM_CLUTCH"):
             self.state = "SCROLLING" if scrolling else "NORMAL"
             self.update()
+
+    def set_scroll_clutch(self, active: bool, velocity: float = 0.0) -> None:
+        """Engage/disengage Asymmetric Left-Wink Scroll Clutch mode."""
+        if active:
+            self.state = "SCROLL_CLUTCH"
+            self.scroll_velocity = velocity
+        elif self.state == "SCROLL_CLUTCH":
+            self.state = "NORMAL"
+            self.scroll_velocity = 0.0
+        self.update()
+
+    def set_zoom_clutch(self, active: bool) -> None:
+        """Engage/disengage Asymmetric Right-Wink Doctor Zoom Clutch mode."""
+        if active:
+            self.state = "ZOOM_CLUTCH"
+        elif self.state == "ZOOM_CLUTCH":
+            self.state = "NORMAL"
+        self.update()
+
+    def set_paused(self, paused: bool) -> None:
+        """No-op: Looking away auto-pause disabled per user preference."""
+        pass
 
     def set_dwell_progress(self, progress: float) -> None:
         self.dwell_progress = max(0.0, min(1.0, progress))
@@ -98,11 +173,15 @@ class SomaticCursorReticle(QWidget):
         if sys.platform == "win32":
             pt = wintypes.POINT()
             ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-            # Center the 56x56 reticle around the cursor hotspot
+            # Align hotspot (28, 28) with cursor position
             self.move(pt.x - 28, pt.y - 28)
+            self._style_check_counter += 1
+            if self._style_check_counter >= 15:
+                self._style_check_counter = 0
+                enforce_click_through_hwnd(int(self.winId()))
 
-        # Check click expiration
-        if self.state == "CLICKED" and time.perf_counter() >= self._click_expire:
+        # Check click/unlock expiration
+        if self.state in ("CLICKED", "UNLOCKED_FLASH") and time.perf_counter() >= self._click_expire:
             self.state = "NORMAL"
 
         self.update()
@@ -112,13 +191,19 @@ class SomaticCursorReticle(QWidget):
         p.setRenderHint(QPainter.Antialiasing)
 
         w, h = self.width(), self.height()
-        cx, cy = w / 2.0, h / 2.0
+        cx, cy = 28.0, 28.0
 
         # State color selection
         if self.state == "CLICKED":
             color = QColor("#00E676")  # Emerald Green
+        elif self.state == "UNLOCKED_FLASH":
+            color = QColor("#FFD700")  # Bright Gold
         elif self.state == "DRAG_LOCKED":
             color = QColor("#E0303D")  # Crimson
+        elif self.state == "SCROLL_CLUTCH":
+            color = QColor("#00E5FF")  # Bright Cyan/Blue Scroll Ring
+        elif self.state == "ZOOM_CLUTCH":
+            color = QColor("#D500F9")  # Neon Violet/Magenta Precision Zoom
         elif self.state == "SCROLLING":
             color = QColor("#FFD600")  # Amber Yellow
         else:
@@ -151,13 +236,59 @@ class SomaticCursorReticle(QWidget):
             span = int(self.dwell_progress * 360 * 16)
             p.drawArc(int(cx - 24), int(cy - 24), 48, 48, 90 * 16, -span)
 
-        # State specific badge/icons
+        # State specific badge/icons & Latched text pills
         if self.state == "DRAG_LOCKED":
-            p.setBrush(QBrush(color))
-            p.drawRect(int(cx - 3), int(cy - 3), 6, 6)
-            p.setFont(QFont("Cascadia Code", 7, QFont.Bold))
-            p.setPen(QPen(color))
-            p.drawText(int(cx - 12), int(cy + 24), "HOLD")
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#E0303D"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#E0303D")))
+            p.drawText(badge_rect, Qt.AlignCenter, "🔴 DRAG LOCKED | Move Head\n👁️x3 Triple-Blink to Drop")
+        elif self.state == "UNLOCKED_FLASH":
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#00E676"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#00E676")))
+            p.drawText(badge_rect, Qt.AlignCenter, "✅ UNLOCKED — FREE CURSOR")
+        elif self.state == "SCROLL_CLUTCH":
+            # Glow Pill Badge to the right of reticle
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#00E5FF"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#00E5FF")))
+            p.drawText(badge_rect, Qt.AlignCenter, "🔵 SCROLL LOCKED | Tilt ▲/▼\n👁️x3 Triple-Blink to Exit")
+
+            p.setFont(QFont("Segoe UI", 9, QFont.Bold))
+            if self.scroll_velocity > 0:
+                p.drawText(int(cx - 4), int(cy - 16), "▲")
+            elif self.scroll_velocity < 0:
+                p.drawText(int(cx - 4), int(cy + 24), "▼")
+            else:
+                p.drawText(int(cx - 4), int(cy - 16), "▲")
+                p.drawText(int(cx - 4), int(cy + 24), "▼")
+        elif self.state == "ZOOM_CLUTCH":
+            # Precision doctor crosshair extension
+            p.setPen(QPen(color, 2.0))
+            p.drawLine(int(cx - 12), int(cy), int(cx - 4), int(cy))
+            p.drawLine(int(cx + 4), int(cy), int(cx + 12), int(cy))
+            p.drawLine(int(cx), int(cy - 12), int(cx), int(cy - 4))
+            p.drawLine(int(cx), int(cy + 4), int(cx), int(cy + 12))
+
+            # Glow Pill Badge to the right of reticle
+            badge_rect = QRectF(cx + 26, cy - 14, 230, 28)
+            p.setBrush(QBrush(QColor(15, 23, 42, 230)))
+            p.setPen(QPen(QColor("#D500F9"), 1.5))
+            p.drawRoundedRect(badge_rect, 6, 6)
+
+            p.setFont(QFont("Segoe UI", 8, QFont.Bold))
+            p.setPen(QPen(QColor("#D500F9")))
+            p.drawText(badge_rect, Qt.AlignCenter, "🟣 ZOOM LOCKED | Tilt ▲/▼\n👁️x3 Triple-Blink to Exit")
         elif self.state == "SCROLLING":
             p.setFont(QFont("Segoe UI", 9, QFont.Bold))
             p.setPen(QPen(color))

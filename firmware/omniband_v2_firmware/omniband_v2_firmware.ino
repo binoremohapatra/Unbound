@@ -97,6 +97,8 @@ static void dsp_task(void*) {
 
     double sacc[4] = {0, 0, 0, 0};
     int scnt = 0;
+    int ble_scnt = 0;
+    double ble_env_peak[4] = {0, 0, 0, 0};
     const int64_t period_us = k::kTimingDspTickUs;
     int64_t next = esp_timer_get_time();
     int32_t raw[4] = {0, 0, 0, 0};
@@ -176,8 +178,10 @@ static void dsp_task(void*) {
         // scope accumulator: peak env per channel
         {
             auto env = core.envelopes();
-            for (int i = 0; i < 4; ++i)
+            for (int i = 0; i < 4; ++i) {
                 if (env[i] > sacc[i]) sacc[i] = env[i];
+                if (env[i] > ble_env_peak[i]) ble_env_peak[i] = env[i];
+            }
             if (++scnt >= (g_scope_div > 0 ? g_scope_div : 4)) {
                 scnt = 0;
                 portENTER_CRITICAL(&g_state_mux);
@@ -189,6 +193,18 @@ static void dsp_task(void*) {
                 g_state.scope_head = (uint8_t)((g_state.scope_head + 1) & 63);
                 if (g_state.scope_count < 64) g_state.scope_count++;
                 portEXIT_CRITICAL(&g_state_mux);
+            }
+
+            // 100 Hz BLE Notification (every 10 ms window = 5 samples @ 500 Hz)
+            if (++ble_scnt >= 5) {
+                ble_scnt = 0;
+                g_link.send_ble_somatic(
+                    (int32_t)ble_env_peak[0],
+                    (int32_t)ble_env_peak[1],
+                    (int32_t)ble_env_peak[2],
+                    (int32_t)ble_env_peak[3]
+                );
+                for (int i = 0; i < 4; ++i) ble_env_peak[i] = 0;
             }
         }
 

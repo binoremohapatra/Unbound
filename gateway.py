@@ -63,11 +63,44 @@ if ctypes.sizeof(ctypes.c_void_p) == 8:
     assert ctypes.sizeof(INPUT) == 40, f"INPUT is {ctypes.sizeof(INPUT)} bytes, expected 40"
 
 INPUT_MOUSE, INPUT_KEYBOARD = 0, 1
-KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE = 0x0001, 0x0002, 0x0008
+KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, KEYEVENTF_SCANCODE = 0x0001, 0x0002, 0x0004, 0x0008
 MOUSEEVENTF_MOVE = 0x0001
+MOUSEEVENTF_LEFTDOWN = 0x0002
+MOUSEEVENTF_LEFTUP = 0x0004
+MOUSEEVENTF_RIGHTDOWN = 0x0008
+MOUSEEVENTF_RIGHTUP = 0x0010
+MOUSEEVENTF_MIDDLEDOWN = 0x0020
+MOUSEEVENTF_MIDDLEUP = 0x0040
+MOUSEEVENTF_VIRTUALDESK = 0x4000
+MOUSEEVENTF_ABSOLUTE = 0x8000
 MOUSE_FLAGS = {  # name -> (down, up)
     "left": (0x0002, 0x0004), "right": (0x0008, 0x0010), "middle": (0x0020, 0x0040),
 }
+
+
+def get_virtual_desktop_bounds() -> tuple[int, int, int, int]:
+    """Return (vx, vy, vw, vh) of the entire virtual desktop span."""
+    if os.name != "nt":
+        return (0, 0, 1920, 1080)
+    try:
+        u32 = ctypes.windll.user32
+        vx = u32.GetSystemMetrics(76)  # SM_XVIRTUALSCREEN
+        vy = u32.GetSystemMetrics(77)  # SM_YVIRTUALSCREEN
+        vw = u32.GetSystemMetrics(78)  # SM_CXVIRTUALSCREEN
+        vh = u32.GetSystemMetrics(79)  # SM_CYVIRTUALSCREEN
+        if vw > 0 and vh > 0:
+            return (vx, vy, vw, vh)
+    except Exception:
+        pass
+    return (0, 0, 1920, 1080)
+
+
+def normalize_virtual_coords(px: int, py: int) -> tuple[int, int]:
+    """Convert desktop pixel coordinates into normalized 0..65535 absolute virtual coordinates."""
+    vx, vy, vw, vh = get_virtual_desktop_bounds()
+    norm_x = int(((px - vx) * 65535) / (vw - 1)) if vw > 1 else 0
+    norm_y = int(((py - vy) * 65535) / (vh - 1)) if vh > 1 else 0
+    return (max(0, min(65535, norm_x)), max(0, min(65535, norm_y)))
 
 # DirectX / set-1 hardware scancodes. (code, extended)
 SCANCODES: dict[str, tuple[int, bool]] = {
@@ -107,6 +140,8 @@ class Backend(Protocol):
     def mouse_button(self, name: str, down: bool) -> None: ...
     def mouse_move(self, dx: int, dy: int) -> None: ...
     def commit(self) -> None: ...
+    def send_unicode_text(self, text: str) -> None: ...
+    def send_key_vk(self, vk: int) -> None: ...
 
 
 class RecordingBackend:
@@ -135,6 +170,12 @@ class RecordingBackend:
     def commit(self) -> None:
         return None
 
+    def send_unicode_text(self, text: str) -> None:
+        self.log.append(("unicode", text))
+
+    def send_key_vk(self, vk: int) -> None:
+        self.log.append(("vk", vk))
+
 
 def build_key_input(name: str, down: bool) -> INPUT:
     code, ext = SCANCODES[name]
@@ -144,9 +185,29 @@ def build_key_input(name: str, down: bool) -> INPUT:
     return inp
 
 
-def build_mouse_button_input(name: str, down: bool) -> INPUT:
+def build_unicode_input(char_code: int, down: bool) -> INPUT:
+    inp = INPUT(type=INPUT_KEYBOARD)
+    flags = KEYEVENTF_UNICODE | (0 if down else KEYEVENTF_KEYUP)
+    inp.u.ki = KEYBDINPUT(0, char_code, flags, 0, 0)
+    return inp
+
+
+def build_vk_input(vk: int, down: bool) -> INPUT:
+    inp = INPUT(type=INPUT_KEYBOARD)
+    flags = (0 if down else KEYEVENTF_KEYUP)
+    inp.u.ki = KEYBDINPUT(vk, 0, flags, 0, 0)
+    return inp
+
+
+def build_mouse_button_input(name: str, down: bool, px: Optional[int] = None, py: Optional[int] = None) -> INPUT:
     inp = INPUT(type=INPUT_MOUSE)
-    inp.u.mi = MOUSEINPUT(0, 0, 0, MOUSE_FLAGS[name][0 if down else 1], 0, 0)
+    flag = MOUSE_FLAGS[name][0 if down else 1]
+    if px is not None and py is not None:
+        norm_x, norm_y = normalize_virtual_coords(px, py)
+        flag |= (MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK | MOUSEEVENTF_MOVE)
+        inp.u.mi = MOUSEINPUT(norm_x, norm_y, 0, flag, 0, 0)
+    else:
+        inp.u.mi = MOUSEINPUT(0, 0, 0, flag, 0, 0)
     return inp
 
 
@@ -193,6 +254,30 @@ class SendInputBackend:
         # neither the return value nor GetLastError reveals it. elevation.ElevationMonitor handles it.
         if sent != n:
             log.error("SendInput sent %d/%d (GetLastError=%d)", sent, n, ctypes.GetLastError())
+
+    def send_unicode_text(self, text: str) -> None:
+        """Inject unicode text directly via SendInput KEYEVENTF_UNICODE."""
+        if not text:
+            return
+        inputs = []
+        for ch in text:
+            code = ord(ch)
+            inputs.append(build_unicode_input(code, True))
+            inputs.append(build_unicode_input(code, False))
+        n = len(inputs)
+        arr = (INPUT * n)(*inputs)
+        sent = self._user32.SendInput(n, arr, ctypes.sizeof(INPUT))
+        if sent != n:
+            log.error("SendInput unicode sent %d/%d (GetLastError=%d)", sent, n, ctypes.GetLastError())
+
+    def send_key_vk(self, vk: int) -> None:
+        """Inject a single virtual key code down+up directly via SendInput."""
+        inp_down = build_vk_input(vk, True)
+        inp_up = build_vk_input(vk, False)
+        arr = (INPUT * 2)(inp_down, inp_up)
+        sent = self._user32.SendInput(2, arr, ctypes.sizeof(INPUT))
+        if sent != 2:
+            log.error("SendInput vk sent %d/2 (GetLastError=%d)", sent, ctypes.GetLastError())
 
 
 # ------------------------------------------------------------------ gateway
@@ -381,6 +466,38 @@ class Gateway:
             self.button_map = dict(BUTTON_MAP, **(button_map or {}))
             self.axis_map = dict(AXIS_MAP, **(axis_map or {}))
 
+    def send_unicode_text(self, text: str) -> None:
+        """Send arbitrary unicode text directly into active foreground window."""
+        with self._lock:
+            if hasattr(self.backend, "send_unicode_text"):
+                self.backend.send_unicode_text(text)
+            elif hasattr(self.backend, "log"):
+                self.backend.log.append(("unicode", text))
+
+    def send_key_vk(self, vk: int) -> None:
+        """Send virtual key code (e.g. VK_BACK=0x08, VK_RETURN=0x0D) directly."""
+        with self._lock:
+            if hasattr(self.backend, "send_key_vk"):
+                self.backend.send_key_vk(vk)
+            elif hasattr(self.backend, "log"):
+                self.backend.log.append(("vk", vk))
+
+    def mouse_click(self, button: str = "left") -> None:
+        """Trigger an instant mouse click (down + up)."""
+        with self._lock:
+            self._want_mouse.add(button)
+            self._sync_locked()
+            self._want_mouse.discard(button)
+            self._sync_locked()
+
+    def show_microsoft_keyboard(self, target_hwnd: int = 0) -> bool:
+        """Launch Microsoft Windows Native Keyboard (TabTip/OSK)."""
+        return show_microsoft_keyboard(target_hwnd)
+
+    def hide_microsoft_keyboard(self) -> None:
+        """Dismiss Microsoft Windows Native Keyboard."""
+        hide_microsoft_keyboard()
+
     @property
     def held(self) -> frozenset:
         with self._lock:
@@ -516,3 +633,23 @@ class KillSwitch:
         edge = down and not self._was
         self._was = down
         return edge
+
+
+def show_microsoft_keyboard(target_hwnd: int = 0) -> bool:
+    """Launch Microsoft Windows Native Keyboard (TabTip.exe / OSK)."""
+    try:
+        from host.omniband.app.touch_keyboard import show_microsoft_keyboard as _show_kb
+        return _show_kb(target_hwnd)
+    except Exception as e:
+        log.warning("show_microsoft_keyboard failed: %s", e)
+        return False
+
+
+def hide_microsoft_keyboard() -> None:
+    """Dismiss Microsoft Windows Native Keyboard."""
+    try:
+        from host.omniband.app.touch_keyboard import hide_microsoft_keyboard as _hide_kb
+        _hide_kb()
+    except Exception as e:
+        log.warning("hide_microsoft_keyboard failed: %s", e)
+

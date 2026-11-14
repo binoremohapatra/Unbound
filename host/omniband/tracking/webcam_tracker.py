@@ -31,6 +31,10 @@ from host.omniband.tracking.paths import (
     resource_path,
     ModelIntegrityError,
 )
+from host.omniband.tracking.optical_calibration import (
+    OpticalCalibrator,
+    OpticalCalibrationProfile,
+)
 
 log = logging.getLogger("omniband.tracking.webcam")
 
@@ -69,6 +73,9 @@ class TrackerResult:
     yaw: float  # Degrees (+ right, - left)
     pitch: float  # Degrees (+ down, - up)
     timestamp_ms: int
+    left_ear: Optional[float] = None
+    right_ear: Optional[float] = None
+    eye_dist: Optional[float] = None
     frame_rgb: Optional[np.ndarray] = None
 
 
@@ -100,8 +107,8 @@ class OneEuroFilter:
         t0: float = 0.0,
         x0: float = 0.0,
         dx0: float = 0.0,
-        min_cutoff: float = 0.6,
-        beta: float = 0.03,
+        min_cutoff: float = 0.8,
+        beta: float = 0.007,
         d_cutoff: float = 1.0,
     ) -> None:
         self.min_cutoff = float(min_cutoff)
@@ -372,6 +379,11 @@ class RealWebcamTracker:
         on_gesture: Optional[Callable[[int, bool, float], None]] = None,
         on_click: Optional[Callable[[], None]] = None,
         on_drag_toggle: Optional[Callable[[], None]] = None,
+        on_scroll_clutch: Optional[Callable[[bool, float], None]] = None,
+        on_zoom_clutch: Optional[Callable[[bool, float, float], None]] = None,
+        on_latch_changed: Optional[Callable[[str], None]] = None,
+        on_universal_exit: Optional[Callable[[], None]] = None,
+        optical_calibrator: Optional[OpticalCalibrator] = None,
     ) -> None:
         self.camera_id = camera_id
         self.on_envelopes = on_envelopes
@@ -379,20 +391,26 @@ class RealWebcamTracker:
         self.on_gesture = on_gesture
         self.on_click = on_click
         self.on_drag_toggle = on_drag_toggle
+        self.on_scroll_clutch = on_scroll_clutch
+        self.on_zoom_clutch = on_zoom_clutch
+        self.on_latch_changed = on_latch_changed
+        self.on_universal_exit = on_universal_exit
+        self.calibrator = optical_calibrator or OpticalCalibrator()
 
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._frame_source: Optional[FrameSource] = None
 
-        # 1-Euro Filters for relative deltas
-        self.filter_dx = OneEuroFilter(min_cutoff=0.6, beta=0.08, d_cutoff=1.0)
-        self.filter_dy = OneEuroFilter(min_cutoff=0.6, beta=0.08, d_cutoff=1.0)
+        # 1-Euro Filters for relative deltas (Tuned butter-smooth at 60 FPS)
+        self.filter_dx = OneEuroFilter(min_cutoff=0.8, beta=0.007, d_cutoff=1.0)
+        self.filter_dy = OneEuroFilter(min_cutoff=0.8, beta=0.007, d_cutoff=1.0)
 
         # Sensitivity and control (calm, precise head-mouse tracking)
         self.speed_multiplier: float = 0.6
         self.gain_x: float = 4.5
         self.gain_y: float = 5.0
-        self.min_cutoff: float = 0.6
+        self.min_cutoff: float = 0.8
+        self.beta: float = 0.007
         self.head_mouse_enabled: bool = True
 
         # Anti-slip freeze
@@ -415,10 +433,29 @@ class RealWebcamTracker:
         self.fps: float = 0.0
         self.current_ear: Optional[float] = None
         self.current_mar: Optional[float] = None
+        self.current_left_ear: Optional[float] = None
+        self.current_right_ear: Optional[float] = None
+        self.current_eye_dist: Optional[float] = None
         self.head_yaw: float = 0.0
         self.head_pitch: float = 0.0
         self.current_tier: str = "NO_FACE"
         self.latest_result: Optional[TrackerResult] = None
+
+        # Asymmetric Wink-Latch State Machine (Opposite-Eye Latch: SCROLL_LOCKED / ZOOM_LOCKED)
+        self.active_latch: str = "IDLE"  # "IDLE", "SCROLL_LOCKED", "ZOOM_LOCKED"
+        self._left_wink_start: float = 0.0
+        self._right_wink_start: float = 0.0
+        self._latch_locked_time: float = 0.0
+        self._pitch_anchor_y: float = 0.45
+        self._filtered_pitch_y: float = 0.45
+        self._scale_anchor_dist: float = 0.12
+        self._last_zoom_step_time: float = 0.0
+
+        # Auto-Baseline Rolling Tracker (Zero-Click Auto-Enable on Startup)
+        self.auto_open_ear_L: float = 0.28
+        self.auto_open_ear_R: float = 0.28
+        self._auto_baseline_samples: int = 0
+        self._auto_calibrated: bool = False
 
         # Gesture state & adaptive baseline
         self._baseline_ear: float = 0.28
@@ -430,6 +467,11 @@ class RealWebcamTracker:
         self._jaw_latched_drag: bool = False
         self._last_gesture_banner: str = ""
         self._gesture_banner_expire: float = 0.0
+
+        # Universal Triple-Blink Exit tracking & Look-Away guard
+        self._blink_timestamps: list[float] = []
+        self._bilateral_blink_start: float = 0.0
+        self.is_looking_away: bool = False
 
         # Channel states
         self._ch1_active: bool = False
@@ -443,6 +485,24 @@ class RealWebcamTracker:
         # Pipeline state tracking
         self._consecutive_misses: int = 0
         self._last_video_timestamp_ms: int = 0
+
+    @property
+    def active_clutch(self) -> str:
+        """Backward-compatibility alias: maps active_latch to clutch names."""
+        if self.active_latch == "SCROLL_LOCKED":
+            return "SCROLL"
+        elif self.active_latch == "ZOOM_LOCKED":
+            return "ZOOM"
+        return "NONE"
+
+    @active_clutch.setter
+    def active_clutch(self, val: str) -> None:
+        if val == "SCROLL":
+            self.active_latch = "SCROLL_LOCKED"
+        elif val == "ZOOM":
+            self.active_latch = "ZOOM_LOCKED"
+        else:
+            self.active_latch = "IDLE"
 
     @property
     def velocity_state(self) -> Tuple[float, float, bool]:
@@ -463,6 +523,26 @@ class RealWebcamTracker:
 
     def trigger_blink_freeze(self, duration_s: float = 0.35) -> None:
         self._freeze_until = time.perf_counter() + duration_s
+
+    def unlock_all_to_idle(self) -> None:
+        """Universal Escape: resets any active latch (SCROLL_LOCKED, ZOOM_LOCKED) back to IDLE immediately."""
+        self.active_latch = "IDLE"
+        self._left_wink_start = 0.0
+        self._right_wink_start = 0.0
+        self._blink_timestamps.clear()
+        self._last_gesture_banner = "✅ UNLOCKED — FREE CURSOR"
+        self._gesture_banner_expire = time.time() + 1.5
+        if self.on_latch_changed:
+            self.on_latch_changed("IDLE")
+        if self.on_scroll_clutch:
+            self.on_scroll_clutch(False, 0.0)
+        if self.on_zoom_clutch:
+            self.on_zoom_clutch(False, 0.0, 1.0)
+        if self.on_universal_exit:
+            try:
+                self.on_universal_exit()
+            except Exception:
+                pass
 
     def recenter(self) -> None:
         """Reset neutral resting centre to current head position."""
@@ -596,15 +676,20 @@ class RealWebcamTracker:
             self.current_tier = res.tier
             self.current_ear = res.ear
             self.current_mar = res.mar
+            self.current_left_ear = res.left_ear
+            self.current_right_ear = res.right_ear
+            self.current_eye_dist = res.eye_dist
             self.head_yaw = res.yaw
             self.head_pitch = res.pitch
 
             # Velocity integration
             self._update_velocity(res, now, w, h)
 
-            # Gesture decoding
-            if res.ear is not None and res.mar is not None:
-                self._process_gestures(res.ear, res.mar, now)
+            # Gesture decoding (Asymmetric Wink-Clutch + Blinks + Jaw)
+            if res.left_ear is not None and res.right_ear is not None and res.mar is not None:
+                self._process_gestures(res, now)
+            elif res.ear is not None and res.mar is not None:
+                self._process_legacy_gestures(res.ear, res.mar, now)
 
             # Envelopes
             self._emit_envelopes(res)
@@ -766,17 +851,31 @@ class RealWebcamTracker:
 
         ear: Optional[float] = None
         mar: Optional[float] = None
+        left_ear: Optional[float] = None
+        right_ear: Optional[float] = None
+        eye_dist: Optional[float] = None
+
+        left_eye_pts = [landmarks_px[i] for i in LEFT_EYE_INDICES]
+        right_eye_pts = [landmarks_px[i] for i in RIGHT_EYE_INDICES]
+        left_ear = calculate_ear(left_eye_pts)
+        right_ear = calculate_ear(right_eye_pts)
+        ear = (left_ear + right_ear) / 2.0
+
+        p_le = landmarks_3d[33]
+        p_re = landmarks_3d[263]
+        eye_dist = math.hypot(p_le[0] - p_re[0], p_le[1] - p_re[1])
 
         if blendshapes and len(blendshapes) > 0:
             bs = {b.category_name: b.score for b in blendshapes[0]}
             blink_score = (bs.get("eyeBlinkLeft", 0.0) + bs.get("eyeBlinkRight", 0.0)) / 2.0
-            ear = max(0.05, 0.35 * (1.0 - blink_score))
+            # Blendshape refine EAR if valid
+            blink_l = bs.get("eyeBlinkLeft", 0.0)
+            blink_r = bs.get("eyeBlinkRight", 0.0)
+            left_ear = max(0.05, 0.35 * (1.0 - blink_l))
+            right_ear = max(0.05, 0.35 * (1.0 - blink_r))
+            ear = (left_ear + right_ear) / 2.0
             mar = bs.get("jawOpen", 0.0)
         else:
-            left_eye_pts = [landmarks_px[i] for i in LEFT_EYE_INDICES]
-            right_eye_pts = [landmarks_px[i] for i in RIGHT_EYE_INDICES]
-            ear = (calculate_ear(left_eye_pts) + calculate_ear(right_eye_pts)) / 2.0
-
             inner_lip_pts = [landmarks_px[i] for i in INNER_LIP_INDICES]
             mar = calculate_mar(inner_lip_pts)
 
@@ -790,6 +889,9 @@ class RealWebcamTracker:
             yaw=yaw,
             pitch=pitch,
             timestamp_ms=timestamp_ms,
+            left_ear=left_ear,
+            right_ear=right_ear,
+            eye_dist=eye_dist,
         )
 
     # ------------------------------------------------------------------
@@ -832,14 +934,17 @@ class RealWebcamTracker:
                 base_speed = self.speed_multiplier * (excess ** 1.35) * 1600.0
                 vx = ux * base_speed * self.gain_x
                 vy = uy * base_speed * self.gain_y
-                if excess < 0.025:
-                    vx *= 0.35
-                    vy *= 0.35
+                self.filter_dx.min_cutoff = self.min_cutoff
+                self.filter_dy.min_cutoff = self.min_cutoff
         else:
             self.filter_dx.reset(now, 0.0)
             self.filter_dy.reset(now, 0.0)
 
-        if now < self._freeze_until:
+        # Natural head-mouse tracking: zero looking-away interruptions!
+        if not res.face_found or res.nose_tip is None or getattr(res, "tier", "") == "NO_FACE":
+            vx = 0.0
+            vy = 0.0
+        elif now < self._freeze_until or self.active_latch != "IDLE":
             vx = 0.0
             vy = 0.0
 
@@ -849,14 +954,198 @@ class RealWebcamTracker:
             self._in_deadzone = in_deadzone
 
     # ------------------------------------------------------------------
-    # Gesture Decoders
+    # Gesture Decoders (Opposite-Eye Latch Lock + Auto-Baseline Rolling Tracker)
     # ------------------------------------------------------------------
-    def _process_gestures(self, ear: float, mar: float, now: float) -> None:
+    def _process_gestures(self, res: TrackerResult, now: float) -> None:
+        left_ear = res.left_ear if res.left_ear is not None else 0.28
+        right_ear = res.right_ear if res.right_ear is not None else 0.28
+        mar = res.mar if res.mar is not None else 0.0
+        ear = res.ear if res.ear is not None else (left_ear + right_ear) / 2.0
+        ny = res.nose_tip[1] if res.nose_tip is not None else 0.45
+        eye_dist = res.eye_dist if res.eye_dist is not None else 0.12
+
+        # ----------------------------------------------------------------
+        # 1. AUTO-BASELINE ROLLING TRACKER (Zero-Click Auto-Enable on Launch)
+        # ----------------------------------------------------------------
+        # Track live open-eye baseline whenever eyes are open and symmetric
+        if left_ear > 0.20 and right_ear > 0.20 and abs(left_ear - right_ear) < 0.045:
+            if not self._auto_calibrated:
+                self._auto_baseline_samples += 1
+                # Fast convergence over first 20 frames
+                alpha_init = 0.25 if self._auto_baseline_samples < 20 else 0.05
+                self.auto_open_ear_L = (1.0 - alpha_init) * self.auto_open_ear_L + alpha_init * left_ear
+                self.auto_open_ear_R = (1.0 - alpha_init) * self.auto_open_ear_R + alpha_init * right_ear
+                if self._auto_baseline_samples >= 20:
+                    self._auto_calibrated = True
+                    log.info("Auto-baseline optical calibration ready: L=%.2f, R=%.2f",
+                             self.auto_open_ear_L, self.auto_open_ear_R)
+            else:
+                # Slow continuous EMA tracking
+                self.auto_open_ear_L = 0.98 * self.auto_open_ear_L + 0.02 * left_ear
+                self.auto_open_ear_R = 0.98 * self.auto_open_ear_R + 0.02 * right_ear
+
+        # Derive dynamic relative wink thresholds
+        # Left Wink Tap: left_ear < auto_open_ear_L * 0.68 while right_ear > auto_open_ear_R * 0.78
+        l_wink_thresh = min(0.24, max(0.14, self.auto_open_ear_L * 0.68))
+        r_open_floor = max(0.16, min(0.28, self.auto_open_ear_R * 0.78))
+
+        # Right Wink Tap: right_ear < auto_open_ear_R * 0.68 while left_ear > auto_open_ear_L * 0.78
+        r_wink_thresh = min(0.24, max(0.14, self.auto_open_ear_R * 0.68))
+        l_open_floor = max(0.16, min(0.28, self.auto_open_ear_L * 0.78))
+
+        # Bilateral Blink: both eyes closing simultaneously
+        is_bilateral_blink = (left_ear < l_wink_thresh) and (right_ear < r_wink_thresh)
+
+        # Track bilateral blink duration (70 ms - 350 ms) & rolling timestamps for Triple-Blink Universal Exit
+        if is_bilateral_blink:
+            if self._bilateral_blink_start == 0.0:
+                self._bilateral_blink_start = now
+        else:
+            if self._bilateral_blink_start > 0.0:
+                dur = now - self._bilateral_blink_start
+                self._bilateral_blink_start = 0.0
+                if 0.06 <= dur <= 0.40:
+                    self._blink_timestamps.append(now)
+                    self._blink_timestamps = [t for t in self._blink_timestamps if now - t <= 1.20]
+                    # Check Universal Triple-Blink Exit (3 blinks within 1.20s)
+                    if len(self._blink_timestamps) >= 3:
+                        self._blink_timestamps.clear()
+                        self._last_blink_time = 0.0
+                        self._blink_active = False
+                        self.unlock_all_to_idle()
+                        return
+
+        # Asymmetric Left Wink condition
+        is_left_wink = (
+            left_ear < l_wink_thresh
+            and right_ear >= r_open_floor
+            and (right_ear - left_ear) >= 0.04
+            and not is_bilateral_blink
+        )
+
+        # Asymmetric Right Wink condition
+        is_right_wink = (
+            right_ear < r_wink_thresh
+            and left_ear >= l_open_floor
+            and (left_ear - right_ear) >= 0.04
+            and not is_bilateral_blink
+        )
+
+        # Smooth filtered pitch
+        self._filtered_pitch_y = 0.80 * self._filtered_pitch_y + 0.20 * ny
+
+        # Track wink tap durations (140 ms to 600 ms)
+        if is_left_wink:
+            if self._left_wink_start == 0.0:
+                self._left_wink_start = now
+        else:
+            self._left_wink_start = 0.0
+
+        if is_right_wink:
+            if self._right_wink_start == 0.0:
+                self._right_wink_start = now
+        else:
+            self._right_wink_start = 0.0
+
+        # ====================================================================
+        # 2. OPPOSITE-EYE LATCH LOCK STATE MACHINE
+        # ====================================================================
+        min_wink_s = 0.14  # 140 ms minimum sustained wink tap
+
+        # -------------------------------------------------------------
+        # STATE: IDLE (Normal Cursor Movement)
+        # -------------------------------------------------------------
+        if self.active_latch == "IDLE":
+            # Left-Wink Tap -> LATCH INTO SCROLL_LOCKED
+            if is_left_wink and (now - self._left_wink_start >= min_wink_s):
+                self.active_latch = "SCROLL_LOCKED"
+                self._latch_locked_time = now
+                self._pitch_anchor_y = ny
+                self._filtered_pitch_y = ny
+                self._left_wink_start = 0.0
+                self._last_gesture_banner = "🔵 SCROLL LOCKED | 👁️x3 Triple-Blink to Exit"
+                self._gesture_banner_expire = now + 2.0
+                if self.on_latch_changed:
+                    self.on_latch_changed("SCROLL_LOCKED")
+                if self.on_scroll_clutch:
+                    self.on_scroll_clutch(True, 0.0)
+                return
+
+            # Right-Wink Tap -> LATCH INTO ZOOM_LOCKED
+            elif is_right_wink and (now - self._right_wink_start >= min_wink_s):
+                self.active_latch = "ZOOM_LOCKED"
+                self._latch_locked_time = now
+                self._pitch_anchor_y = ny
+                self._filtered_pitch_y = ny
+                self._scale_anchor_dist = eye_dist
+                self._right_wink_start = 0.0
+                self._last_gesture_banner = "🟣 ZOOM LOCKED | 👁️x3 Triple-Blink to Exit"
+                self._gesture_banner_expire = now + 2.0
+                if self.on_latch_changed:
+                    self.on_latch_changed("ZOOM_LOCKED")
+                if self.on_zoom_clutch:
+                    self.on_zoom_clutch(True, 0.0, 1.0)
+                return
+
+        # -------------------------------------------------------------
+        # STATE: SCROLL_LOCKED (Both eyes comfortably open! Continuous 60 Hz)
+        # -------------------------------------------------------------
+        elif self.active_latch == "SCROLL_LOCKED":
+            time_since_lock = now - self._latch_locked_time
+            # OPPOSITE-EYE UNLOCK: Right-Wink Tap (>= 140ms) unlocks back to IDLE
+            # Requires 400ms cooldown after entry to prevent instant double-tap exit
+            if time_since_lock >= 0.40 and is_right_wink and (now - self._right_wink_start >= min_wink_s):
+                self.active_latch = "IDLE"
+                self._right_wink_start = 0.0
+                self._last_gesture_banner = "SCROLL UNLOCKED (CURSOR FREE)"
+                self._gesture_banner_expire = now + 1.2
+                if self.on_latch_changed:
+                    self.on_latch_changed("IDLE")
+                if self.on_scroll_clutch:
+                    self.on_scroll_clutch(False, 0.0)
+                return
+
+            # Continuous 60 Hz Smooth Scroll while locked
+            # delta_pitch = pitch_anchor_y - filtered_ny (Head UP -> delta_pitch > 0 -> Scroll UP)
+            delta_pitch = self._pitch_anchor_y - self._filtered_pitch_y
+            if self.on_scroll_clutch:
+                self.on_scroll_clutch(True, delta_pitch)
+            return
+
+        # -------------------------------------------------------------
+        # STATE: ZOOM_LOCKED (Both eyes open! Precision Zoom Steps)
+        # -------------------------------------------------------------
+        elif self.active_latch == "ZOOM_LOCKED":
+            time_since_lock = now - self._latch_locked_time
+            # OPPOSITE-EYE UNLOCK: Left-Wink Tap (>= 140ms) unlocks back to IDLE
+            if time_since_lock >= 0.40 and is_left_wink and (now - self._left_wink_start >= min_wink_s):
+                self.active_latch = "IDLE"
+                self._left_wink_start = 0.0
+                self._last_gesture_banner = "ZOOM UNLOCKED (CURSOR FREE)"
+                self._gesture_banner_expire = now + 1.2
+                if self.on_latch_changed:
+                    self.on_latch_changed("IDLE")
+                if self.on_zoom_clutch:
+                    self.on_zoom_clutch(False, 0.0, 1.0)
+                return
+
+            delta_pitch = self._pitch_anchor_y - self._filtered_pitch_y
+            scale_ratio = eye_dist / max(1e-4, self._scale_anchor_dist)
+            if self.on_zoom_clutch:
+                self.on_zoom_clutch(True, delta_pitch, scale_ratio)
+            return
+
+        # ====================================================================
+        # 3. NORMAL BILATERAL BLINK & JAW GESTURES (Only when IDLE)
+        # ====================================================================
+        self._process_legacy_gestures(ear, mar, now)
+
+    def _process_legacy_gestures(self, ear: float, mar: float, now: float) -> None:
         # Update running baseline for open-eye EAR
         if ear > 0.22:
             self._baseline_ear = 0.95 * self._baseline_ear + 0.05 * ear
 
-        # Adaptive blink threshold (default ~0.22 to 0.24)
+        # Adaptive blink threshold
         blink_threshold = min(0.24, max(0.21, self._baseline_ear * 0.78))
         is_blinking = ear < blink_threshold
 
@@ -864,7 +1153,6 @@ class RealWebcamTracker:
             self._blink_active = True
             self._blink_start_time = now
 
-            # Check if this is the second blink of a double-blink (within 0.10s to 0.85s window)
             time_since_first = now - self._last_blink_time
             if 0.10 <= time_since_first <= 0.85:
                 self.trigger_blink_freeze(0.35)
@@ -879,7 +1167,6 @@ class RealWebcamTracker:
                 self._gesture_banner_expire = now + 0.85
 
         elif is_blinking and self._blink_active:
-            # Deliberate Long Blink / Wink: holding eyes closed for >= 0.40s triggers click
             closed_dur = now - self._blink_start_time
             if closed_dur >= 0.40 and not self._long_blink_fired:
                 self._long_blink_fired = True
@@ -894,8 +1181,8 @@ class RealWebcamTracker:
             self._blink_active = False
             self._long_blink_fired = False
 
-        # Jaw tap -> Click / Jaw hold -> Drag Latch (jaw threshold 0.18)
-        jaw_threshold = 0.18
+        # Jaw tap -> Click / Jaw hold -> Drag Latch
+        jaw_threshold = self.calibrator.profile.jaw_click_thresh
         is_jaw_open = mar > jaw_threshold
         if is_jaw_open:
             if self._jaw_open_start == 0.0:
@@ -1040,10 +1327,13 @@ class RealWebcamTracker:
             cv2.putText(frame_rgb, status, (16, 24), cv2.FONT_HERSHEY_SIMPLEX, 0.50, ring_color, 2, cv2.LINE_AA)
 
             ear_str = f"{self.current_ear:.2f}" if self.current_ear is not None else "--"
+            l_ear_str = f"{self.current_left_ear:.2f}" if self.current_left_ear is not None else "--"
+            r_ear_str = f"{self.current_right_ear:.2f}" if self.current_right_ear is not None else "--"
             mar_str = f"{self.current_mar:.2f}" if self.current_mar is not None else "--"
+            latch_str = self.active_latch
             cv2.putText(
                 frame_rgb,
-                f"FPS: {self.fps:4.1f} | EAR: {ear_str} | MAR: {mar_str} | TIER: {self.current_tier}",
+                f"FPS: {self.fps:4.1f} | L:{l_ear_str} R:{r_ear_str} | MAR:{mar_str} | LATCH: {latch_str}",
                 (16, h - 16),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (247, 245, 240), 1, cv2.LINE_AA,
             )
@@ -1088,3 +1378,7 @@ class RealWebcamTracker:
                 (16, 24),
                 cv2.FONT_HERSHEY_SIMPLEX, 0.45, (247, 245, 240), 1, cv2.LINE_AA,
             )
+
+
+# Alias for backward compatibility
+WebcamTracker = RealWebcamTracker

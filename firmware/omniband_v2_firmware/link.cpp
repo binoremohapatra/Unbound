@@ -56,8 +56,13 @@ void Link::begin(uint32_t baud) {
     hello_sent_ = false;
 }
 
-void Link::send_ble_somatic(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4) {
-    g_ble.notify_frame(ch1, ch2, ch3, ch4, seq_++);
+void Link::send_ble_somatic(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, float dx, float dy) {
+    g_ble.notify_frame(ch1, ch2, ch3, ch4, seq_++, dx, dy);
+}
+
+void Link::send_ble_click() {
+    g_ble.notify_click();
+    Serial.println("\n⚡ [EDGE DSP] >>> ON-DEVICE JAW CLENCH -> LEFT CLICK! <<<");
 }
 
 void Link::set_baud(uint32_t baud) {

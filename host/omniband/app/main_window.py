@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
     sig_ble_frame = Signal(list, list, int)
     sig_imu_motion = Signal(float, float)
     sig_hw_status = Signal(str)
+    sig_hw_gesture = Signal(str)
     sig_text_focus = Signal(bool)
     sig_prune_telemetry = Signal(dict)
     sig_prune_output = Signal(str, bool)
@@ -426,6 +427,7 @@ class MainWindow(QMainWindow):
         self.sig_ble_frame.connect(self._on_ble_frame_event)
         self.sig_imu_motion.connect(self._on_imu_motion_event)
         self.sig_hw_status.connect(self._on_hw_status_event)
+        self.sig_hw_gesture.connect(self._on_hardware_gesture_event)
 
         # Unified Hardware Transport Manager for OmniBand Headband
         self.ble_client = OmniBandBleClient(
@@ -434,6 +436,7 @@ class MainWindow(QMainWindow):
             on_connection_change=lambda conn, name: self.sig_ble_connection.emit(conn, name),
             on_metrics_update=lambda rssi, rate: self.sig_ble_metrics.emit(rssi, rate),
             on_imu_motion=lambda dx, dy: self.sig_imu_motion.emit(dx, dy),
+            on_hardware_gesture=lambda g: self.sig_hw_gesture.emit(g),
         )
         self.ble_client.start()
 
@@ -469,6 +472,14 @@ class MainWindow(QMainWindow):
         """Consistent 60 FPS delta-velocity cursor integration loop."""
         if not self.webcam_tracker.head_mouse_enabled:
             return
+
+        # MPU Hardware Priority Invariant:
+        # If hardware MPU is detected and actively sending motion (within 1.0s),
+        # mute optical head-mouse so hardware MPU has sole cursor authority!
+        now = time.perf_counter()
+        if hasattr(self, "ble_client") and self.ble_client.is_connected:
+            if now - getattr(self, "_last_mpu_motion_time", 0.0) < 1.0:
+                return  # MPU is healthy & driving cursor — suppress optical head-mouse!
         now = time.perf_counter()
         if now < self.webcam_tracker.freeze_until:
             return
@@ -536,6 +547,11 @@ class MainWindow(QMainWindow):
 
         # Suppress normal left clicks while locked in Scroll or Zoom mode!
         if hasattr(self, "webcam_tracker") and self.webcam_tracker.active_latch != "IDLE":
+            return
+
+        # Tier 2 Hybrid Rule: If OmniBand hardware (BLE / USB) is connected,
+        # suppress optical jaw/blink clicks so physical CH4 piezo has sole click authority!
+        if getattr(self, "ble_client", None) and self.ble_client.is_connected:
             return
 
         if hasattr(self, "reticle"):
@@ -916,6 +932,10 @@ class MainWindow(QMainWindow):
         """Inject real OS keys only when in an actual game window and NOT in head-mouse mode."""
         if not self.armed:
             return
+
+        # Suppress optical gestures when physical OmniBand headband is connected
+        if getattr(self, "ble_client", None) and self.ble_client.is_connected:
+            return
         now_str = time.strftime("%H:%M:%S")
 
         # CRITICAL RULE: When Head-Mouse mode is active, head movement NEVER injects keyboard keys!
@@ -1157,10 +1177,55 @@ class MainWindow(QMainWindow):
         self.status.showMessage(status_msg, 3000)
         self.calib.append_log(f"HW: {status_msg}")
 
+    def _on_hardware_gesture_event(self, gesture: str) -> None:
+        """Route on-device Edge DSP detected gestures directly to OS actions."""
+        g = gesture.strip().upper()
+        from core.events import OutputCommand
+        from PySide6.QtCore import QTimer
+
+        if g in ("CLICK", "LEFT", "JAW_CLENCH", "RIGHT_CLENCH", "CH4"):
+            self._on_physical_edge(4, True, 200.0)
+            QTimer.singleShot(80, lambda: self._on_physical_edge(4, False, 0.0))
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Left Click")
+        elif g in ("RIGHT", "JAW_TAP", "DOUBLE_CLENCH", "TAP"):
+            self.gw.apply([OutputCommand(kind="button", name="right", pressed=True)])
+            self.gw.flush(time.perf_counter())
+            QTimer.singleShot(80, lambda: (
+                self.gw.apply([OutputCommand(kind="button", name="right", pressed=False)]),
+                self.gw.flush(time.perf_counter())
+            ))
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Right Click")
+        elif g in ("HOLD", "JAW_HOLD", "DRAG"):
+            self._toggle_drag_lock()
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Drag Lock Toggled")
+        elif g in ("SCROLL", "BROW_RAISE", "SCROLL_UP"):
+            self.gw.apply([OutputCommand(kind="wheel", delta_y=120)])
+            self.gw.flush(time.perf_counter())
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Scroll Up")
+        elif g in ("NOD", "SCROLL_DOWN"):
+            self.gw.apply([OutputCommand(kind="wheel", delta_y=-120)])
+            self.gw.flush(time.perf_counter())
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Scroll Down")
+        elif g in ("LEFT_EYE", "EYE_CLOSE", "ESC"):
+            self.gw.apply([OutputCommand(kind="key", name="esc", pressed=True)])
+            self.gw.flush(time.perf_counter())
+            QTimer.singleShot(60, lambda: (
+                self.gw.apply([OutputCommand(kind="key", name="esc", pressed=False)]),
+                self.gw.flush(time.perf_counter())
+            ))
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Escape Key")
+        elif g in ("LEFT_CLENCH", "CH1"):
+            self._on_physical_edge(1, True, 200.0)
+            QTimer.singleShot(80, lambda: self._on_physical_edge(1, False, 0.0))
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Key 'a'")
+
     def _on_imu_motion_event(self, dx: float, dy: float) -> None:
         """Route hardware IMU relative motion directly into Windows cursor."""
-        if dx != 0.0 or dy != 0.0:
+        if abs(dx) > 0.01 or abs(dy) > 0.01:
+            self._last_mpu_motion_time = time.perf_counter()
+            self._mpu_detected = True
             self.gw.move_cursor_relative(dx, dy)
+            self._update_tier_badge()
 
     def _on_ble_connection_event(self, connected: bool, message: str) -> None:
         transport = getattr(self.ble_client, "transport_type", "BLE")
@@ -1213,19 +1278,24 @@ class MainWindow(QMainWindow):
     def _update_tier_badge(self) -> None:
         hw_on = self.ble_client.is_connected
         transport = getattr(self.ble_client, "transport_type", "BLE")
+        now = time.perf_counter()
+        mpu_active = hw_on and (now - getattr(self, "_last_mpu_motion_time", 0.0) < 1.0)
         opt_on = self.webcam_tracker.head_mouse_enabled and self.webcam_tracker.is_alive()
 
-        if hw_on and opt_on:
-            self._lbl_tier.setText(f"ACTIVE: TIER 2 ({transport} + OPTICAL HYBRID)")
-            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+        if hw_on and mpu_active:
+            self._lbl_tier.setText(f"ACTIVE: TIER 1 ({transport} MPU CURSOR + SOMATIC)")
+            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+        elif hw_on and opt_on:
+            self._lbl_tier.setText(f"ACTIVE: TIER 2 ({transport} SOMATIC + OPTICAL FALLBACK CURSOR)")
+            self._lbl_tier.setStyleSheet(f"color: #00E5FF; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         elif hw_on:
-            self._lbl_tier.setText(f"ACTIVE: TIER 1 ({transport})")
+            self._lbl_tier.setText(f"ACTIVE: TIER 1 ({transport} SOMATIC ONLY)")
             self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         elif opt_on:
-            self._lbl_tier.setText("ACTIVE: TIER 3 (OPTICAL)")
-            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+            self._lbl_tier.setText("ACTIVE: TIER 3 (OPTICAL FALLBACK)")
+            self._lbl_tier.setStyleSheet(f"color: #FFB300; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         else:
-            self._lbl_tier.setText("ACTIVE: TIER 1 (OFFLINE)")
+            self._lbl_tier.setText("ACTIVE: TIER 4 (SIMULATOR FALLBACK)")
             self._lbl_tier.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
     def _set_assist_level(self, level: str) -> None:

@@ -230,9 +230,17 @@ def parse_hardware_payload(data: bytes | str) -> Optional[dict]:
         except Exception:
             return None
 
-    # Format 4: Plain text triggers
-    upper_s = s.upper()
-    valid_triggers = {"CLICK", "LEFT", "RIGHT", "SCROLL", "CH1", "CH2", "CH3", "CH4"}
+    # Format 4: Plain text / G-code triggers
+    upper_s = s.upper().strip()
+    if upper_s.startswith("G,") or upper_s.startswith("GESTURE,"):
+        parts = upper_s.split(",")
+        upper_s = parts[1].strip()
+
+    valid_triggers = {
+        "CLICK", "LEFT", "RIGHT", "SCROLL", "CH1", "CH2", "CH3", "CH4",
+        "JAW_TAP", "JAW_HOLD", "DOUBLE_CLENCH", "RIGHT_CLENCH", "LEFT_CLENCH",
+        "BROW_RAISE", "NOD", "HOLD", "LEFT_EYE", "SMILE", "CHEEK_PUFF"
+    }
     if upper_s in valid_triggers:
         return {
             "kind": "gesture",
@@ -434,6 +442,7 @@ class OmniBandBleClient:
         on_connection_change: Optional[Callable[[bool, str], None]] = None,
         on_metrics_update: Optional[Callable[[int, float], None]] = None,
         on_imu_motion: Optional[Callable[[float, float], None]] = None,
+        on_hardware_gesture: Optional[Callable[[str], None]] = None,
     ) -> None:
         if calibrator is not None:
             self.calibrator = calibrator
@@ -444,6 +453,7 @@ class OmniBandBleClient:
         self.on_connection_change = on_connection_change
         self.on_metrics_update = on_metrics_update
         self.on_imu_motion = on_imu_motion
+        self.on_hardware_gesture = on_hardware_gesture
 
         self._running = False
         self._connected = False
@@ -775,6 +785,8 @@ class OmniBandBleClient:
             elif pkt.get("kind") == "gesture":
                 gesture_name = pkt.get("gesture", "")
                 log.info("Hardware gesture received: %s", gesture_name)
+                if getattr(self, "on_hardware_gesture", None):
+                    self.on_hardware_gesture(gesture_name)
 
         except Exception as e:
             log.debug("Error processing hardware payload: %s", e)

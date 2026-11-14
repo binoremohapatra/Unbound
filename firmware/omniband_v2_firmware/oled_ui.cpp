@@ -32,8 +32,12 @@ const char* fsm_name(int st) {
 
 void oled_begin() {
     Wire.begin(21, 22);   // SDA, SCL (ESP32 default I2C)
+    Wire.setTimeOut(50);  // Prevent hanging if OLED display is not connected
     ok = display.begin(SSD1306_SWITCHCAPVCC, 0x3C);
-    if (!ok) return;
+    if (!ok) {
+        Serial.println("[OLED] Display not detected at 0x3C (continuing without OLED)");
+        return;
+    }
     display.clearDisplay();
     display.setTextColor(SSD1306_WHITE);
     display.display();

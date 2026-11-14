@@ -6,7 +6,7 @@
 #include <BLEUtils.h>
 #include <BLE2902.h>
 
-#define OMNIBAND_BLE_DEVICE_NAME "OmniBand-BLE"
+#define OMNIBAND_BLE_DEVICE_NAME "Omniband"
 #define OMNIBAND_SERVICE_UUID    "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define OMNIBAND_CHAR_UUID       "beb5483e-36e1-4688-b7f5-ea07361b26a6"
 

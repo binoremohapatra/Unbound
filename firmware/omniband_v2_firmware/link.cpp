@@ -32,9 +32,12 @@ static const char* ges_name(int g) {
     if (g < 0 || g >= (int)(sizeof(k::kGestures) / sizeof(k::kGestures[0]))) return "?";
     return k::kGestures[g];
 }
+
 static const char* fsm_name(int st) {
-    static const char* n[] = {"IDLE","PRESSED","GAP_WAIT","LONG_FIRED",
-                              "PICKER","SOS_PENDING","NIGHT"};
+    static const char* n[] = {
+        "IDLE", "PRESSED", "GAP_WAIT", "LONG_FIRED",
+        "PICKER", "SOS_PENDING", "NIGHT"
+    };
     if (st < 0 || st >= 7) return "?";
     return n[st];
 }
@@ -45,9 +48,11 @@ void Link::begin(uint32_t baud) {
     Serial.begin(baud);
     Serial.setTimeout(0);
     g_ble.begin();
-    if (SerialBT.begin("OmniBand-V2")) {
-        SerialBT.setTimeout(0);
-    }
+    // Note: Classic BluetoothSerial is disabled so it doesn't conflict
+    // with BLE controller/radio resources on ESP32.
+    // if (SerialBT.begin("Omniband")) {
+    //     SerialBT.setTimeout(0);
+    // }
     hello_sent_ = false;
 }
 
@@ -214,14 +219,14 @@ void Link::handle_line(const String& line, const char* src) {
     strlcpy(c.name, k, sizeof(c.name));
 
     // per-command argument decode (wire fields per PROTOCOL.md)
-    if (strcmp(k, "set_mode") == 0)        c.i0 = (int32_t)(o["mode"] | 0);
+    if (strcmp(k, "set_mode") == 0)         c.i0 = (int32_t)(o["mode"] | 0);
     else if (strcmp(k, "set_thr") == 0) {
         c.i0 = (int32_t)(o["ch"] | 0);
         c.d0 = o["on"].is<float>() ? (double)o["on"] : 0.0;
         c.i1 = o["off"].is<float>() ? (int32_t)(o["off"].as<float>() + 0.5f) : -1;
     }
-    else if (strcmp(k, "recal") == 0)      json_get_str(o, "what", c.s0, sizeof(c.s0));
-    else if (strcmp(k, "cal_step") == 0)   json_get_str(o, "step", c.s0, sizeof(c.s0));
+    else if (strcmp(k, "recal") == 0)       json_get_str(o, "what", c.s0, sizeof(c.s0));
+    else if (strcmp(k, "cal_step") == 0)    json_get_str(o, "step", c.s0, sizeof(c.s0));
     else if (strcmp(k, "set_cfg") == 0) {
         json_get_str(o, "key", c.s0, sizeof(c.s0));
         c.d0 = o["val"].is<float>() ? (double)o["val"] : 0.0;
@@ -230,9 +235,9 @@ void Link::handle_line(const String& line, const char* src) {
         c.i0 = (int32_t)(o["on"] | 0);
         c.i1 = (int32_t)(o["rate"] | 1);
     }
-    else if (strcmp(k, "ping") == 0)       c.d0 = o["th"].is<float>() ? (double)o["th"] : 0.0;
-    else if (strcmp(k, "set_baud") == 0)   c.i0 = (int32_t)(o["baud"] | 0);
-    else if (strcmp(k, "night") == 0)      c.i0 = (int32_t)(o["on"] | 0);
+    else if (strcmp(k, "ping") == 0)        c.d0 = o["th"].is<float>() ? (double)o["th"] : 0.0;
+    else if (strcmp(k, "set_baud") == 0)    c.i0 = (int32_t)(o["baud"] | 0);
+    else if (strcmp(k, "night") == 0)       c.i0 = (int32_t)(o["on"] | 0);
     else if (strcmp(k, "oled_msg") == 0) {
         json_get_str(o, "text", c.s0, sizeof(c.s0));
         c.i0 = o["ms"].is<int>() ? (int)o["ms"] : 2000;
@@ -266,7 +271,6 @@ void Link::handle_line(const String& line, const char* src) {
         send_ack(c.id, false, "busy");
         return;
     }
-    // ack is sent by the dsp task via g_reply_queue
 }
 
 void Link::poll() {
@@ -323,7 +327,7 @@ void Link::poll() {
             for (int ch = 0; ch < 4; ++ch) {
                 JsonArray xs = x.add<JsonArray>();
                 for (int i = 0; i < n; ++i) {
-                    int idx = (st.scope_head + 64 - n + i) & 63;
+                    int idx = (st.scope_head + 64 - 16 + i) & 63;
                     xs.add(st.scope_hist[ch][idx]);
                 }
             }

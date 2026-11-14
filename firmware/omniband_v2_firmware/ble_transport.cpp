@@ -4,12 +4,17 @@
 OmniBandBleServer g_ble;
 
 void OmniBandBleServer::begin() {
+    // 1. Create the BLE Device (exact same implementation as working test)
     BLEDevice::init(OMNIBAND_BLE_DEVICE_NAME);
+
+    // 2. Create the BLE Server
     pServer_ = BLEDevice::createServer();
     pServer_->setCallbacks(this);
 
+    // 3. Create the BLE Service
     BLEService* pService = pServer_->createService(OMNIBAND_SERVICE_UUID);
 
+    // 4. Create Characteristic
     pChar_ = pService->createCharacteristic(
         OMNIBAND_CHAR_UUID,
         BLECharacteristic::PROPERTY_READ   |
@@ -19,15 +24,19 @@ void OmniBandBleServer::begin() {
 
     pChar_->setCallbacks(this);
     pChar_->addDescriptor(new BLE2902());
+    pChar_->setValue("Hello from OmniBand ESP32!");
 
+    // 5. Start the service
     pService->start();
 
+    // 6. Start advertising (exact same sequence as working test)
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(OMNIBAND_SERVICE_UUID);
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06); // functions that help with iPhone connections issue
     pAdvertising->setMinPreferred(0x12);
     BLEDevice::startAdvertising();
+    Serial.println("[BLE] BLE advertised successfully. Looking for devices...");
 }
 
 void OmniBandBleServer::onConnect(BLEServer* pServer) {

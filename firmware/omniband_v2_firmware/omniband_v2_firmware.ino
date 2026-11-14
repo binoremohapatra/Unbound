@@ -32,7 +32,7 @@ using omniband::OutEvent;
 // ------------------------------------------------------------------ globals
 SharedState g_state = {};
 portMUX_TYPE g_state_mux = portMUX_INITIALIZER_UNLOCKED;
-volatile int g_scope_div = 4;                    // 4 -> 125 Hz publish
+volatile int g_scope_div = 4;                       // 4 -> 125 Hz publish
 QueueHandle_t g_cmd_queue = nullptr;
 QueueHandle_t g_reply_queue = nullptr;
 QueueHandle_t g_evt_queue = nullptr;
@@ -234,25 +234,38 @@ static void dsp_task(void*) {
 
 // ------------------------------------------------------------------ sketch
 void setup() {
-    Serial.begin(k::kLinkBaudBoot);
-    Serial.setTimeout(0);
+    Serial.begin(115200);
+    delay(500);
+    Serial.println("\n[BOOT] OmniBand Firmware Booting...");
 
+    // 1. Initialize BLE FIRST before DSP or I2C
+    Serial.println("[BOOT] Initializing BLE stack...");
+    g_link.begin(115200);
+
+    // 2. Storage & Configuration
+    Serial.println("[BOOT] Loading config store...");
     cfgstore::begin();
     cfgstore::load(g_persist);
     for (int i = 0; i < 4; ++i) g_thr_mirror[i] = g_persist.thr_on[i];
 
+    // 3. Hardware sensors & display (safe non-blocking)
+    Serial.println("[BOOT] Initializing ADC front-end...");
     g_adc.begin();
     cal::begin();
+    
+    Serial.println("[BOOT] Initializing OLED...");
     oled_begin();
 
+    // 4. Queues & DSP background task
+    Serial.println("[BOOT] Starting DSP FreeRTOS task...");
     g_cmd_queue = xQueueCreate(24, sizeof(HostCmd));
     g_reply_queue = xQueueCreate(24, sizeof(HostReply));
     g_evt_queue = xQueueCreate(48, sizeof(OutEvent));
 
     xTaskCreatePinnedToCore(dsp_task, "dsp", 8192, nullptr, 20, nullptr, 0);
 
-    g_link.begin(k::kLinkBaudBoot);
     g_link.send_hello();
+    Serial.println("[BOOT] Boot complete. OmniBand running!");
 }
 
 void loop() {

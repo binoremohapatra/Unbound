@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
     sig_ble_frame = Signal(list, list, int)
     sig_imu_motion = Signal(float, float)
     sig_hw_status = Signal(str)
+    sig_hw_gesture = Signal(str)
     sig_text_focus = Signal(bool)
     sig_prune_telemetry = Signal(dict)
     sig_prune_output = Signal(str, bool)
@@ -426,6 +427,7 @@ class MainWindow(QMainWindow):
         self.sig_ble_frame.connect(self._on_ble_frame_event)
         self.sig_imu_motion.connect(self._on_imu_motion_event)
         self.sig_hw_status.connect(self._on_hw_status_event)
+        self.sig_hw_gesture.connect(self._on_hardware_gesture_event)
 
         # Unified Hardware Transport Manager for OmniBand Headband
         self.ble_client = OmniBandBleClient(
@@ -434,6 +436,7 @@ class MainWindow(QMainWindow):
             on_connection_change=lambda conn, name: self.sig_ble_connection.emit(conn, name),
             on_metrics_update=lambda rssi, rate: self.sig_ble_metrics.emit(rssi, rate),
             on_imu_motion=lambda dx, dy: self.sig_imu_motion.emit(dx, dy),
+            on_hardware_gesture=lambda g: self.sig_hw_gesture.emit(g),
         )
         self.ble_client.start()
 
@@ -1173,6 +1176,25 @@ class MainWindow(QMainWindow):
     def _on_hw_status_event(self, status_msg: str) -> None:
         self.status.showMessage(status_msg, 3000)
         self.calib.append_log(f"HW: {status_msg}")
+
+    def _on_hardware_gesture_event(self, gesture: str) -> None:
+        """Route on-device Edge DSP detected gestures directly to OS actions."""
+        g = gesture.strip().upper()
+        if g in ("CLICK", "LEFT", "JAW_CLENCH", "CH4"):
+            self._on_physical_edge(4, True, 200.0)
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(80, lambda: self._on_physical_edge(4, False, 0.0))
+            self.calib.append_log(f"⚡ [EDGE DSP] Hardware Gesture: {g} -> Left Click")
+        elif g in ("RIGHT", "JAW_TAP"):
+            from core.events import OutputCommand
+            self.gw.apply([OutputCommand(kind="button", name="right", pressed=True)])
+            self.gw.flush(time.perf_counter())
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(80, lambda: (
+                self.gw.apply([OutputCommand(kind="button", name="right", pressed=False)]),
+                self.gw.flush(time.perf_counter())
+            ))
+            self.calib.append_log(f"⚡ [EDGE DSP] Hardware Gesture: {g} -> Right Click")
 
     def _on_imu_motion_event(self, dx: float, dy: float) -> None:
         """Route hardware IMU relative motion directly into Windows cursor."""

@@ -434,6 +434,7 @@ class OmniBandBleClient:
         on_connection_change: Optional[Callable[[bool, str], None]] = None,
         on_metrics_update: Optional[Callable[[int, float], None]] = None,
         on_imu_motion: Optional[Callable[[float, float], None]] = None,
+        on_hardware_gesture: Optional[Callable[[str], None]] = None,
     ) -> None:
         if calibrator is not None:
             self.calibrator = calibrator
@@ -444,6 +445,7 @@ class OmniBandBleClient:
         self.on_connection_change = on_connection_change
         self.on_metrics_update = on_metrics_update
         self.on_imu_motion = on_imu_motion
+        self.on_hardware_gesture = on_hardware_gesture
 
         self._running = False
         self._connected = False
@@ -775,6 +777,8 @@ class OmniBandBleClient:
             elif pkt.get("kind") == "gesture":
                 gesture_name = pkt.get("gesture", "")
                 log.info("Hardware gesture received: %s", gesture_name)
+                if getattr(self, "on_hardware_gesture", None):
+                    self.on_hardware_gesture(gesture_name)
 
         except Exception as e:
             log.debug("Error processing hardware payload: %s", e)

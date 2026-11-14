@@ -196,8 +196,8 @@ static void dsp_task(void*) {
                 portEXIT_CRITICAL(&g_state_mux);
             }
 
-            // 100 Hz BLE Notification (every 10 ms window = 5 samples @ 500 Hz)
-            if (++ble_scnt >= 5) {
+            // 25 Hz BLE Notification (every 40 ms window = 20 samples @ 500 Hz)
+            if (++ble_scnt >= 20) {
                 ble_scnt = 0;
                 float dx = 0.0f, dy = 0.0f;
                 g_mpu.read(dx, dy);

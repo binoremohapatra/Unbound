@@ -27,6 +27,7 @@ import asyncio
 import json
 import logging
 import struct
+import sys
 import threading
 import time
 from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
@@ -235,11 +236,14 @@ def parse_hardware_payload(data: bytes | str) -> Optional[dict]:
     if upper_s.startswith("G,") or upper_s.startswith("GESTURE,"):
         parts = upper_s.split(",")
         upper_s = parts[1].strip()
+    elif upper_s.startswith("SCROLL,"):
+        upper_s = "SCROLL"
 
     valid_triggers = {
-        "CLICK", "LEFT", "RIGHT", "SCROLL", "CH1", "CH2", "CH3", "CH4",
+        "CLICK", "LEFT", "RIGHT", "MIDDLE", "SCROLL", "CH1", "CH2", "CH3", "CH4",
         "JAW_TAP", "JAW_HOLD", "DOUBLE_CLENCH", "RIGHT_CLENCH", "LEFT_CLENCH",
-        "BROW_RAISE", "NOD", "HOLD", "LEFT_EYE", "SMILE", "CHEEK_PUFF"
+        "BROW_RAISE", "NOD", "HOLD", "DRAG", "DRAG_ON", "DRAG_OFF",
+        "LEFT_EYE", "SMILE", "CHEEK_PUFF"
     }
     if upper_s in valid_triggers:
         return {
@@ -443,6 +447,7 @@ class OmniBandBleClient:
         on_metrics_update: Optional[Callable[[int, float], None]] = None,
         on_imu_motion: Optional[Callable[[float, float], None]] = None,
         on_hardware_gesture: Optional[Callable[[str], None]] = None,
+        on_status_change: Optional[Callable[[str], None]] = None,
     ) -> None:
         if calibrator is not None:
             self.calibrator = calibrator
@@ -454,6 +459,7 @@ class OmniBandBleClient:
         self.on_metrics_update = on_metrics_update
         self.on_imu_motion = on_imu_motion
         self.on_hardware_gesture = on_hardware_gesture
+        self.on_status_change = on_status_change
 
         self._running = False
         self._connected = False
@@ -464,6 +470,7 @@ class OmniBandBleClient:
         self._thread: Optional[threading.Thread] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
         self._active_notify_char: Optional[str] = None
+        self._connect_lock: Optional[asyncio.Lock] = None
 
         # USB Serial Worker
         self._serial_worker: Optional[SerialTransportWorker] = None
@@ -599,7 +606,15 @@ class OmniBandBleClient:
     def _run_async_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._worker_coroutine())
+        try:
+            self._loop.run_until_complete(self._worker_coroutine())
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+        finally:
+            try:
+                self._loop.close()
+            except Exception:
+                pass
 
     async def _worker_coroutine(self) -> None:
         """Continuous background monitor."""
@@ -614,87 +629,100 @@ class OmniBandBleClient:
         if self.is_connected and self._transport_type == "USB":
             return
 
-        try:
-            self._update_status("Scanning for OmniBand / ESP32 BLE...")
-            devices = await BleakScanner.discover(timeout=3.0)
-            target_device = None
+        if self._connect_lock is None:
+            self._connect_lock = asyncio.Lock()
+        if self._connect_lock.locked():
+            return
 
-            # Broad matching: name keywords OR advertised service UUID
-            for d in devices:
-                name_str = (d.name or "").lower()
-                if any(kw in name_str for kw in KNOWN_DEVICE_KEYWORDS):
-                    target_device = d
-                    break
-                if d.metadata and "uuids" in d.metadata:
-                    if any(SERVICE_UUID.lower() == u.lower() for u in d.metadata["uuids"]):
+        async with self._connect_lock:
+            try:
+                self._update_status("Scanning for OmniBand / ESP32 BLE...")
+                discovered = await BleakScanner.discover(timeout=5.0, return_adv=True)
+                target_device = None
+                target_adv = None
+
+                # Broad matching: service UUID OR name keywords in local_name / d.name
+                for d, adv in discovered.values():
+                    name_str = (getattr(adv, "local_name", None) or d.name or "").lower()
+                    adv_uuids = [str(u).lower() for u in (getattr(adv, "service_uuids", None) or [])]
+
+                    if SERVICE_UUID.lower() in adv_uuids:
                         target_device = d
+                        target_adv = adv
+                        break
+                    if any(kw in name_str for kw in KNOWN_DEVICE_KEYWORDS):
+                        target_device = d
+                        target_adv = adv
                         break
 
-            if not target_device:
-                return
+                if not target_device:
+                    return
 
-            rssi = getattr(target_device, "rssi", -60) or -60
-            name = target_device.name or OMNIBAND_BLE_NAME
-            self._update_status(f"Found {name} ({rssi} dBm), connecting GATT...")
+                rssi = getattr(target_adv, "rssi", None) or getattr(target_device, "rssi", -60) or -60
+                name = (getattr(target_adv, "local_name", None) if target_adv else None) or target_device.name or OMNIBAND_BLE_NAME
+                self._update_status(f"Found {name} ({rssi} dBm), connecting GATT...")
 
-            # 3x Fast Retry for Windows WinRT backend
-            connected = False
-            for attempt in range(1, 4):
-                try:
-                    log.info("Connecting to BLEDevice %s (%s), attempt %d/3...", name, target_device.address, attempt)
-                    async with BleakClient(
-                        target_device,
-                        timeout=12.0,
-                        disconnected_callback=self._on_ble_disconnect,
-                    ) as client:
-                        self._client = client
-                        if client.is_connected:
-                            connected = True
-                            with self._lock:
-                                self._connected = True
-                                self._transport_type = "BLE"
-                                self._device_address = target_device.address
-                                self._device_name = name
-                                self._rssi = rssi
+                # 3x Fast Retry for Windows WinRT backend
+                connected = False
+                for attempt in range(1, 4):
+                    try:
+                        log.info("Connecting to BLEDevice %s (%s), attempt %d/3...", name, target_device.address, attempt)
+                        kwargs = {
+                            "timeout": 12.0,
+                            "disconnected_callback": self._on_ble_disconnect,
+                        }
+                        if sys.platform == "win32":
+                            kwargs["winrt"] = {"use_cached_services": False}
 
-                            # Dynamic Characteristic Discovery
-                            subscribed_uuid = await self._subscribe_best_notify_characteristic(client)
-                            self._active_notify_char = subscribed_uuid
+                        async with BleakClient(target_device, **kwargs) as client:
+                            self._client = client
+                            if client.is_connected:
+                                connected = True
+                                with self._lock:
+                                    self._connected = True
+                                    self._transport_type = "BLE"
+                                    self._device_address = target_device.address
+                                    self._device_name = name
+                                    self._rssi = rssi
 
-                            msg = f"Connected to {name} via BLE ({subscribed_uuid})"
-                            self._update_status(f"🟢 CONNECTED: HARDWARE (BLE)")
-                            if self.on_connection_change:
-                                self.on_connection_change(True, msg)
+                                # Dynamic Characteristic Discovery
+                                subscribed_uuid = await self._subscribe_best_notify_characteristic(client)
+                                self._active_notify_char = subscribed_uuid
 
-                            # Connection heartbeat loop
-                            while self._running and client.is_connected:
-                                await asyncio.sleep(0.5)
-                                now = time.perf_counter()
-                                dt = now - self._last_metrics_calc_t
-                                if dt >= 1.0:
-                                    self._pkt_rate = self._packet_count / dt
-                                    self._packet_count = 0
-                                    self._last_metrics_calc_t = now
-                                    if self.on_metrics_update:
-                                        self.on_metrics_update(self._rssi, self._pkt_rate)
+                                msg = f"Connected to {name} via BLE ({subscribed_uuid})"
+                                self._update_status(f"🟢 CONNECTED: HARDWARE (BLE)")
+                                if self.on_connection_change:
+                                    self.on_connection_change(True, msg)
 
-                            if client.is_connected and subscribed_uuid:
-                                try:
-                                    await client.stop_notify(subscribed_uuid)
-                                except Exception:
-                                    pass
-                            break
+                                # Connection heartbeat loop
+                                while self._running and client.is_connected:
+                                    await asyncio.sleep(0.5)
+                                    now = time.perf_counter()
+                                    dt = now - self._last_metrics_calc_t
+                                    if dt >= 1.0:
+                                        self._pkt_rate = self._packet_count / dt
+                                        self._packet_count = 0
+                                        self._last_metrics_calc_t = now
+                                        if self.on_metrics_update:
+                                            self.on_metrics_update(self._rssi, self._pkt_rate)
 
-                except Exception as e:
-                    log.debug("BLE connect attempt %d failed: %s", attempt, e)
-                    if attempt < 3:
-                        await asyncio.sleep(0.5)
+                                if client.is_connected and subscribed_uuid:
+                                    try:
+                                        await client.stop_notify(subscribed_uuid)
+                                    except Exception:
+                                        pass
+                                break
 
-            if not connected:
-                self._update_status("BLE handshake timed out. Retrying...")
+                    except Exception as e:
+                        log.debug("BLE connect attempt %d failed: %s", attempt, e)
+                        if attempt < 3:
+                            await asyncio.sleep(0.5)
 
-        except Exception as e:
-            log.debug("BLE scan cycle error: %s", e)
+                if not connected:
+                    self._update_status("BLE handshake timed out. Retrying...")
+
+            except Exception as e:
+                log.debug("BLE scan cycle error: %s", e)
 
     async def _subscribe_best_notify_characteristic(self, client: BleakClient) -> str:
         """
@@ -749,6 +777,11 @@ class OmniBandBleClient:
     def _update_status(self, msg: str) -> None:
         self._last_status = msg
         log.debug("Hardware transport status: %s", msg)
+        if getattr(self, "on_status_change", None):
+            try:
+                self.on_status_change(msg)
+            except Exception:
+                pass
 
     def _on_ble_notification(self, sender: BleakGATTCharacteristic, data: bytearray) -> None:
         self._packet_count += 1

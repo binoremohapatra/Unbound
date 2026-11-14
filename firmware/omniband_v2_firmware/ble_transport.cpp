@@ -4,11 +4,8 @@
 OmniBandBleServer g_ble;
 
 void OmniBandBleServer::begin() {
-    // 1. Create the BLE Device - EXACTLY matching the working standalone test
+    // 1. Create the BLE Device (exact same implementation as working test)
     BLEDevice::init(OMNIBAND_BLE_DEVICE_NAME);
-
-    // NOTE: NO BLESecurity object - security manager causes connection rejection
-    // on Windows and Android when no pairing UI is shown. Open BLE = no bond needed.
 
     // 2. Create the BLE Server
     pServer_ = BLEDevice::createServer();
@@ -32,11 +29,11 @@ void OmniBandBleServer::begin() {
     // 5. Start the service
     pService->start();
 
-    // 6. Start advertising - identical sequence to working standalone test
+    // 6. Start advertising (exact same sequence as working test)
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
     pAdvertising->addServiceUUID(OMNIBAND_SERVICE_UUID);
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06);  // helps with iPhone connection issues
+    pAdvertising->setMinPreferred(0x06); // functions that help with iPhone connections issue
     pAdvertising->setMinPreferred(0x12);
     BLEDevice::startAdvertising();
     Serial.println("[BLE] BLE advertised successfully. Looking for devices...");
@@ -45,13 +42,11 @@ void OmniBandBleServer::begin() {
 void OmniBandBleServer::onConnect(BLEServer* pServer) {
     (void)pServer;
     connected_ = true;
-    Serial.println("[BLE] Device connected successfully!");
 }
 
 void OmniBandBleServer::onDisconnect(BLEServer* pServer) {
     (void)pServer;
     connected_ = false;
-    Serial.println("[BLE] Device disconnected. Restarting advertising...");
     // Restart advertising so client can reconnect seamlessly
     BLEDevice::startAdvertising();
 }

@@ -22,6 +22,8 @@ import threading
 import time
 from typing import Callable, Optional, Set
 
+from host.omniband.app.touch_keyboard import show_microsoft_keyboard, hide_microsoft_keyboard
+
 log = logging.getLogger("omniband.app.text_focus")
 
 GUI_CARETBLINKING = 0x00000001
@@ -109,7 +111,7 @@ class TextFocusWatcher:
     def __init__(
         self,
         on_text_focus_changed: Optional[Callable[[bool], None]] = None,
-        poll_hz: float = 8.0,
+        poll_hz: float = 30.0,
     ) -> None:
         self.on_text_focus_changed = on_text_focus_changed
         self.poll_hz = poll_hz
@@ -192,7 +194,7 @@ class TextFocusWatcher:
 
     def _delayed_click_worker(self, click_x: int, click_y: int) -> None:
         try:
-            time.sleep(0.090)
+            time.sleep(0.120)
             self._evaluate_click_check(click_x, click_y)
         finally:
             self._delayed_worker_active = False
@@ -216,6 +218,7 @@ class TextFocusWatcher:
             if cls_name in ("Shell_TrayWnd", "Progman", "WorkerW"):
                 self.dismiss()
                 self._notify_focus_change(False, hwnd_fg)
+                hide_microsoft_keyboard()
                 return
 
             proc_fg = self._get_process_name_cached(hwnd_fg)
@@ -274,11 +277,15 @@ class TextFocusWatcher:
                     self._user_dismissed = False
                     self._is_text_focused = True
                 self._notify_focus_change(True, hwnd_fg)
+                show_microsoft_keyboard(target_hwnd=hwnd_fg)
             else:
                 # User clicked outside onto a non-text area -> auto-dismiss
                 if not self.is_dismissed:
                     self.dismiss()
                     self._notify_focus_change(False, hwnd_fg)
+                    hide_microsoft_keyboard()
+        except Exception:
+            pass
         except Exception:
             pass
 
@@ -440,6 +447,6 @@ class TextFocusWatcher:
             if focused != self._is_text_focused:
                 with self._lock:
                     self._is_text_focused = focused
-                self._notify_focus_change(focused, self._active_target_hwnd)
+                # Passive background polling never pops up uninvited; clicks trigger TabTip
 
             time.sleep(dt)

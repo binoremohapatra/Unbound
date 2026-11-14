@@ -45,6 +45,13 @@ from host.omniband.hardware.ble_client import OmniBandBleClient
 from host.omniband.hardware.hardware_calibration import HardwareCalibrator
 from host.omniband.tracking.optical_calibration import OpticalCalibrator, OpticalCalibrationProfile
 from host.omniband.app.text_focus_watcher import TextFocusWatcher
+from host.omniband.app.touch_keyboard import (
+    show_microsoft_keyboard,
+    hide_microsoft_keyboard,
+    enable_tablet_tip_registry,
+    show_windows_touch_keyboard,
+    hide_windows_touch_keyboard,
+)
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +68,8 @@ class MainWindow(QMainWindow):
         super().__init__(parent)
         self.setWindowTitle("OmniBand Command Center")
         self.resize(1024, 680)
+
+        enable_tablet_tip_registry()
 
         self.sig_biometric_click.connect(self._on_biometric_click)
         self.sig_drag_toggle.connect(self._toggle_drag_lock)
@@ -142,15 +151,16 @@ class MainWindow(QMainWindow):
         self._lbl_ble_metrics.setFont(QFont("Cascadia Code", 9))
         self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
 
+        self._btn_microsoft_kb = QPushButton("⌨️ MICROSOFT KEYBOARD")
+        self._btn_microsoft_kb.setStyleSheet(f"background: {BURNT_ORANGE}; color: #111; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
+        self._btn_microsoft_kb.clicked.connect(lambda: show_microsoft_keyboard())
+
         btn_toggle_hud = QPushButton("Toggle Tactical HUD")
         btn_toggle_hud.clicked.connect(self._toggle_hud)
 
         self._chk_reticle = QCheckBox("🎯 Tactical Reticle")
         self._chk_reticle.setChecked(True)
         self._chk_reticle.toggled.connect(lambda c: self.reticle.setVisible(c))
-
-        btn_popout_kb = QPushButton("⌨️ Windows OSK")
-        btn_popout_kb.clicked.connect(self._launch_windows_osk)
 
         self._btn_head_mouse = QPushButton("🖱️ HEAD-MOUSE: ON [F11]")
         self._btn_head_mouse.setCheckable(True)
@@ -172,12 +182,12 @@ class MainWindow(QMainWindow):
 
         top_bar.addWidget(self._btn_arm)
         top_bar.addWidget(self._btn_head_mouse)
-        top_bar.addWidget(btn_popout_kb)
         top_bar.addWidget(lbl_mode)
         top_bar.addWidget(self._combo_mode)
         top_bar.addWidget(self._chk_lock_mode)
         top_bar.addWidget(self._chk_allow_all)
         top_bar.addSpacing(12)
+        top_bar.addWidget(self._btn_microsoft_kb)
         top_bar.addWidget(self._chk_reticle)
         top_bar.addWidget(self._lbl_tier)
         top_bar.addWidget(self._btn_scan_ble)
@@ -764,18 +774,17 @@ class MainWindow(QMainWindow):
         self.calib.append_log(f"Profile updated: L-Wink={prof.left_wink_thresh:.2f}, R-Wink={prof.right_wink_thresh:.2f}")
 
     def _launch_windows_osk(self) -> None:
-        """Launch Microsoft Windows Native On-Screen Keyboard (osk.exe)."""
-        if sys.platform == "win32":
-            try:
-                import subprocess
-                subprocess.Popen("osk.exe", shell=True)
-                self.calib.append_log("Launched Microsoft On-Screen Keyboard (osk.exe).")
-            except Exception as e:
-                self.calib.append_log(f"Failed to launch osk.exe: {e}")
+        """Launch Microsoft Windows Official Keyboard (TabTip / OSK)."""
+        show_microsoft_keyboard()
+        self.calib.append_log("Invoked Microsoft Official Keyboard.")
 
     def _on_text_focus_auto_popup(self, has_focus: bool, target_hwnd: int = 0) -> None:
-        """Auto-popup disabled per user request: avoids popups when text field is not clicked."""
-        pass
+        """Trigger Microsoft Windows Native Keyboard on text field focus."""
+        if has_focus:
+            show_microsoft_keyboard(target_hwnd=target_hwnd)
+            self.calib.append_log(f"TEXT FOCUS DETECTED: Invoking Microsoft Keyboard (target hwnd={target_hwnd}).")
+        else:
+            hide_microsoft_keyboard()
 
     def _on_speed_slider_changed(self, val: int) -> None:
         speed = val / 10.0

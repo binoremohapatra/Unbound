@@ -488,3 +488,50 @@ def test_gateway_send_unicode_and_direct_typing():
     assert vk_inp.u.ki.wVk == 0x08
     assert vk_inp.u.ki.dwFlags == 0
 
+
+def test_microsoft_keyboard_cascade_and_registry():
+    import sys
+    from host.omniband.app.touch_keyboard import (
+        enable_tablet_tip_registry,
+        is_tabtip_visible,
+        is_osk_visible,
+        show_microsoft_keyboard,
+        hide_microsoft_keyboard,
+        launch_osk_fallback,
+    )
+    import gateway
+
+    # 1. Registry auto-invoke configuration
+    if sys.platform == "win32":
+        ok = enable_tablet_tip_registry()
+        assert ok is True
+        import winreg
+        key = winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Software\Microsoft\TabletTip\1.7")
+        val1, _ = winreg.QueryValueEx(key, "EnableDesktopModeAutoInvoke")
+        val2, _ = winreg.QueryValueEx(key, "DisableNewKeyboardExperience")
+        winreg.CloseKey(key)
+        assert val1 == 1
+        assert val2 == 0
+
+    # 2. Status inspection functions return booleans without raising
+    assert isinstance(is_tabtip_visible(), bool)
+    assert isinstance(is_osk_visible(), bool)
+
+    # 3. Invocation cascade and gateway bridge functions execute cleanly
+    assert show_microsoft_keyboard(target_hwnd=0) is True
+    hide_microsoft_keyboard()
+
+    assert gateway.show_microsoft_keyboard(0) is True
+    gateway.hide_microsoft_keyboard()
+
+    # 4. TextFocusWatcher 30 Hz polling and notify_click detection
+    from host.omniband.app.text_focus_watcher import TextFocusWatcher
+    clicked_events = []
+    w = TextFocusWatcher(on_text_focus_changed=lambda f: clicked_events.append(f), poll_hz=30.0)
+    assert w.poll_hz == 30.0
+    w.notify_click(100, 100)
+    w.dismiss()
+    assert w.is_dismissed is True
+    w.stop()
+
+

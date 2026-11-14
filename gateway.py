@@ -482,6 +482,22 @@ class Gateway:
             elif hasattr(self.backend, "log"):
                 self.backend.log.append(("vk", vk))
 
+    def mouse_click(self, button: str = "left") -> None:
+        """Trigger an instant mouse click (down + up)."""
+        with self._lock:
+            self._want_mouse.add(button)
+            self._sync_locked()
+            self._want_mouse.discard(button)
+            self._sync_locked()
+
+    def show_microsoft_keyboard(self, target_hwnd: int = 0) -> bool:
+        """Launch Microsoft Windows Native Keyboard (TabTip/OSK)."""
+        return show_microsoft_keyboard(target_hwnd)
+
+    def hide_microsoft_keyboard(self) -> None:
+        """Dismiss Microsoft Windows Native Keyboard."""
+        hide_microsoft_keyboard()
+
     @property
     def held(self) -> frozenset:
         with self._lock:
@@ -617,3 +633,23 @@ class KillSwitch:
         edge = down and not self._was
         self._was = down
         return edge
+
+
+def show_microsoft_keyboard(target_hwnd: int = 0) -> bool:
+    """Launch Microsoft Windows Native Keyboard (TabTip.exe / OSK)."""
+    try:
+        from host.omniband.app.touch_keyboard import show_microsoft_keyboard as _show_kb
+        return _show_kb(target_hwnd)
+    except Exception as e:
+        log.warning("show_microsoft_keyboard failed: %s", e)
+        return False
+
+
+def hide_microsoft_keyboard() -> None:
+    """Dismiss Microsoft Windows Native Keyboard."""
+    try:
+        from host.omniband.app.touch_keyboard import hide_microsoft_keyboard as _hide_kb
+        _hide_kb()
+    except Exception as e:
+        log.warning("hide_microsoft_keyboard failed: %s", e)
+

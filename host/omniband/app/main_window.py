@@ -1144,7 +1144,7 @@ class MainWindow(QMainWindow):
 
     def _on_scan_ble_clicked(self) -> None:
         self.calib.append_log("Operator triggered BLE Scan / Connect.")
-        self.status.showMessage("Scanning for OmniBand-BLE headband...", 3000)
+        self.status.showMessage("Scanning for Omniband headband...", 3000)
         self.ble_client.trigger_scan_connect()
 
     def _on_ble_connection_event(self, connected: bool, message: str) -> None:
@@ -1166,7 +1166,7 @@ class MainWindow(QMainWindow):
 
     def _on_ble_metrics_event(self, rssi: int, rate: float) -> None:
         self._lbl_ble_metrics.setText(f"BLE: {rate:.1f} pkt/s | {rssi} dBm")
-        self.calib.set_ble_metrics(self.ble_client.is_connected, "OmniBand-BLE", rssi, rate)
+        self.calib.set_ble_metrics(self.ble_client.is_connected, "Omniband", rssi, rate)
 
     def _on_ble_frame_event(self, ch_vals: list[float], active: list[bool], seq: int) -> None:
         # Feed calibration wizard if active

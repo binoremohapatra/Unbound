@@ -87,6 +87,9 @@ class WebcamAdapter:
         return None
 
     def _capture_loop(self) -> None:
+        if self.on_heartbeat:
+            self.on_heartbeat()
+
         if not HAS_CV2:
             logger.warning("OpenCV not installed. Running webcam adapter in mock mode.")
             self._run_mock_loop()
@@ -183,7 +186,20 @@ class WebcamAdapter:
                 if detection_result.face_blendshapes:
                     for b in detection_result.face_blendshapes[0]:
                         blendshape_map[b.category_name] = b.score
-                else:
+
+                # High-sensitivity Eye Aspect Ratio (EAR) ensembling
+                ear_l = abs(face_landmarks[159].y - face_landmarks[145].y) / (abs(face_landmarks[33].x - face_landmarks[133].x) + 1e-6)
+                ear_r = abs(face_landmarks[386].y - face_landmarks[374].y) / (abs(face_landmarks[263].x - face_landmarks[362].x) + 1e-6)
+                geom_blink_l = max(0.0, min(1.0, (0.24 - ear_l) * 9.0))
+                geom_blink_r = max(0.0, min(1.0, (0.24 - ear_r) * 9.0))
+
+                # Combine neural blendshapes with geometric EAR for maximum detection accuracy
+                bs_l = blendshape_map.get("eyeBlinkLeft", 0.0)
+                bs_r = blendshape_map.get("eyeBlinkRight", 0.0)
+                blendshape_map["eyeBlinkLeft"] = max(bs_l, geom_blink_l)
+                blendshape_map["eyeBlinkRight"] = max(bs_r, geom_blink_r)
+
+                if "jawOpen" not in blendshape_map:
                     upper_lip = face_landmarks[13].y
                     lower_lip = face_landmarks[14].y
                     jaw_open_raw = max(0.0, min(1.0, (lower_lip - upper_lip) * 15.0))
@@ -241,11 +257,17 @@ class WebcamAdapter:
                         lower_lip = face_landmarks[14].y
                         jaw_open_raw = max(0.0, min(1.0, (lower_lip - upper_lip) * 15.0))
 
+                        # Eye Aspect Ratio for blink
+                        ear_l = abs(face_landmarks[159].y - face_landmarks[145].y) / (abs(face_landmarks[33].x - face_landmarks[133].x) + 1e-6)
+                        ear_r = abs(face_landmarks[386].y - face_landmarks[374].y) / (abs(face_landmarks[263].x - face_landmarks[362].x) + 1e-6)
+                        blink_l = max(0.0, min(1.0, (0.22 - ear_l) * 9.0))
+                        blink_r = max(0.0, min(1.0, (0.22 - ear_r) * 9.0))
+
                         self.on_event(
                             SignalEvent(
                                 signal_type=SignalType.BLENDSHAPE,
                                 name="blendshapes",
-                                value={"jawOpen": jaw_open_raw},
+                                value={"jawOpen": jaw_open_raw, "eyeBlinkLeft": blink_l, "eyeBlinkRight": blink_r},
                                 timestamp=now,
                             )
                         )

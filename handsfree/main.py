@@ -28,6 +28,7 @@ from handsfree.adapters.webcam import WebcamAdapter
 from handsfree.adapters.audio import AudioAdapter
 from handsfree.adapters.switch import SwitchAdapter
 from handsfree.adapters.replay import ReplayAdapter
+from handsfree.core.cursor_tracker import CursorTracker
 from handsfree.dashboard.server import DashboardServer
 
 logging.basicConfig(
@@ -73,10 +74,36 @@ class HandsfreeEngine:
         self.mapper = ProfileMapper.from_file(profile_path)
         logger.info(f"Loaded controller profile: '{self.mapper.name}'")
 
-        # 6. Dashboard Server
+        # 6. Dashboard Server & Head Cursor Tracker
         self.dashboard = None
         if not args.no_dashboard:
-            self.dashboard = DashboardServer(host=args.dashboard_host, port=args.dashboard_port)
+            tracker = CursorTracker(
+                angle_range_x=args.angle_range_x,
+                angle_range_y=args.angle_range_y,
+                deadzone_deg=args.deadzone,
+                invert_x=args.invert_x,
+                auto_calibrate=True,
+                enable_blink=args.enable_blink_click,
+            )
+
+            def on_assistive_cmd(action: str, payload: Any = None):
+                if action == "pause_tracking":
+                    self.state_machine.transition_to(SystemState.PAUSED)
+                elif action == "resume_tracking":
+                    self.state_machine.transition_to(SystemState.ACTIVE)
+                elif action == "emergency_stop":
+                    self.gateway.release_all()
+                elif action == "exit_app":
+                    self.stop()
+
+            self.dashboard = DashboardServer(
+                host=args.dashboard_host,
+                port=args.dashboard_port,
+                cursor_tracker=tracker,
+                gateway=self.gateway,
+                watchdog=self.watchdog,
+                on_assistive_cmd=on_assistive_cmd,
+            )
 
         # 7. Adapters
         self.adapters = []
@@ -90,7 +117,13 @@ class HandsfreeEngine:
                 pass
 
         def on_heartbeat():
+            if self.state_machine.current_state == SystemState.PAUSED:
+                self.state_machine.transition_to(SystemState.ACTIVE)
+                if self.dashboard:
+                    self.dashboard.update_telemetry("state", "active")
             self.watchdog.beat()
+            if self.dashboard and hasattr(self.dashboard, "guardian"):
+                self.dashboard.guardian.record_webcam_frame(has_face=True)
 
         if self.args.replay:
             logger.info(f"Replay mode active with: {self.args.replay}")
@@ -184,26 +217,73 @@ class HandsfreeEngine:
                 if self.dashboard:
                     self.dashboard.update_telemetry("pose", {"yaw": yaw, "pitch": pitch, "roll": roll})
                     if hasattr(self.dashboard, "cursor_tracker"):
-                        cursor_pos, (dx, dy) = self.dashboard.cursor_tracker.process_head_pose(
+                        tracker = self.dashboard.cursor_tracker
+                        dx, dy, (cx, cy), dwell_status = tracker.process_head_pose(
                             yaw, pitch, event.timestamp
                         )
-                        dwell_status = self.dashboard.cursor_tracker.process_dwell(
-                            cursor_pos[0], cursor_pos[1], event.timestamp
-                        )
+                        norm_x = cx / max(1.0, float(tracker.screen_width))
+                        norm_y = cy / max(1.0, float(tracker.screen_height))
+
+                        # Move physical Windows cursor on non-dry-run
+                        import os
+                        if not self.args.dry_run and os.name == "nt":
+                            try:
+                                import ctypes
+                                ctypes.windll.user32.SetCursorPos(int(cx), int(cy))
+                            except Exception:
+                                pass
+
                         self.dashboard.update_telemetry("cursor", {
-                            "x": cursor_pos[0], "y": cursor_pos[1], "dx": dx, "dy": dy
+                            "x": cx, "y": cy, "dx": dx, "dy": dy,
+                            "norm_x": norm_x, "norm_y": norm_y,
                         })
-                        self.dashboard.update_telemetry("dwell", {
-                            "state": dwell_status.state.value,
-                            "progress": dwell_status.progress,
-                            "action": dwell_status.action.value,
-                            "dragging": dwell_status.is_dragging,
-                        })
+                        if dwell_status:
+                            self.dashboard.update_telemetry("dwell", {
+                                "state": dwell_status.state.value,
+                                "progress": dwell_status.progress,
+                                "action": dwell_status.action.value,
+                                "dragging": dwell_status.is_dragging,
+                            })
+                            if self.args.enable_dwell_click and dwell_status.state.value == "triggered" and not self.args.dry_run and os.name == "nt":
+                                try:
+                                    import ctypes
+                                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)
+                                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)
+                                except Exception:
+                                    pass
 
             elif event.signal_type == SignalType.BLENDSHAPE:
-                intents.extend(self.slowpath.process_blendshapes(event.value, event.timestamp))
+                blendshapes = event.value
+                intents.extend(self.slowpath.process_blendshapes(blendshapes, event.timestamp))
                 if self.dashboard:
-                    self.dashboard.update_telemetry("blendshapes", event.value)
+                    self.dashboard.update_telemetry("blendshapes", blendshapes)
+
+                # High-accuracy double-blink left-click detection
+                blink_l = blendshapes.get("eyeBlinkLeft", 0.0)
+                blink_r = blendshapes.get("eyeBlinkRight", 0.0)
+                avg_blink = (blink_l + blink_r) / 2.0
+                effective_blink = max(avg_blink, max(blink_l, blink_r) * 0.90)
+
+                if self.dashboard and hasattr(self.dashboard, "cursor_tracker"):
+                    tracker = self.dashboard.cursor_tracker
+                    if tracker.blink_detector:
+                        clicked = tracker.blink_detector.update(effective_blink, event.timestamp)
+                        self.dashboard.update_telemetry("blink", {
+                            "score": effective_blink,
+                            "count": tracker.blink_detector.blink_count,
+                            "clicked": clicked,
+                        })
+                        if clicked:
+                            logger.info("Double-blink detected! Dispatching Windows Left Click.")
+                            import os
+                            if not self.args.dry_run and os.name == "nt":
+                                try:
+                                    import ctypes
+                                    ctypes.windll.user32.mouse_event(0x0002, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTDOWN
+                                    ctypes.windll.user32.mouse_event(0x0004, 0, 0, 0, 0)  # MOUSEEVENTF_LEFTUP
+                                except Exception as e:
+                                    logger.error(f"Error dispatching mouse click: {e}")
+                            self.dashboard.update_telemetry("blink_click", {"timestamp": event.timestamp})
 
             elif event.signal_type == SignalType.AUDIO_POP:
                 intents.append(Intent(action="pop", value=1.0, source="audio"))
@@ -245,7 +325,13 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--no-dashboard", action="store_true", help="Disable web HUD dashboard server")
     parser.add_argument("--dashboard-host", type=str, default="127.0.0.1", help="Dashboard host IP")
     parser.add_argument("--dashboard-port", type=int, default=8080, help="Dashboard port")
-    parser.add_argument("--watchdog-timeout", type=float, default=0.35, help="Safety heartbeat timeout in seconds")
+    parser.add_argument("--watchdog-timeout", type=float, default=0.75, help="Safety heartbeat timeout in seconds")
+    parser.add_argument("--angle-range-x", type=float, default=20.0, help="Head yaw degrees for full screen width (larger=less sensitive)")
+    parser.add_argument("--angle-range-y", type=float, default=15.0, help="Head pitch degrees for full screen height (larger=less sensitive)")
+    parser.add_argument("--deadzone", type=float, default=2.5, help="Head pose deadzone in degrees (suppress micro-jitter)")
+    parser.add_argument("--invert-x", action=argparse.BooleanOptionalAction, default=True, help="Invert X axis for mirror webcam (default: True)")
+    parser.add_argument("--enable-blink-click", action=argparse.BooleanOptionalAction, default=True, help="Enable double-blink left click (default: True)")
+    parser.add_argument("--enable-dwell-click", action="store_true", default=False, help="Enable automatic dwell click on hover stop (default: False)")
     return parser.parse_args()
 
 

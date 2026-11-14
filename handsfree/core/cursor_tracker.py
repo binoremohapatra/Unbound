@@ -144,6 +144,91 @@ class DwellClicker:
         self.dwell_start_time = 0.0
 
 
+class DoubleBlinkDetector:
+    """High-accuracy deliberate double-eye blink detector with dynamic baseline.
+    
+    Catches deliberate double blinks cleanly while rejecting single involuntary blinks
+    and prolonged eye closure (resting/sleeping).
+    """
+
+    def __init__(
+        self,
+        min_blink_duration: float = 0.03,    # Min 30ms (catches fast blinks on 30fps webcams)
+        max_blink_duration: float = 0.65,    # Max 650ms per blink (relaxed, natural)
+        double_blink_window: float = 1.05,   # Up to 1.05s between 1st and 2nd blink
+        cooldown: float = 0.40,              # Cooldown after triggering
+        on_double_blink: Optional[Callable[[], None]] = None,
+    ):
+        self.min_blink_duration = min_blink_duration
+        self.max_blink_duration = max_blink_duration
+        self.double_blink_window = double_blink_window
+        self.cooldown = cooldown
+        self.on_double_blink = on_double_blink
+
+        self.eyes_closed = False
+        self.close_start_time = 0.0
+        self.peak_blink_score = 0.0
+        self.baseline_open = 0.12            # Adaptive open-eye baseline
+        self.last_blink_time = 0.0
+        self.blink_count = 0
+        self.cooldown_end_time = 0.0
+
+    def update(self, blink_score: float, timestamp: Optional[float] = None) -> bool:
+        """Updates with current blink score (0.0 to 1.0).
+        
+        Returns:
+            True if double blink triggered on this frame, else False.
+        """
+        now = timestamp if timestamp is not None else time.time()
+
+        if now < self.cooldown_end_time:
+            return False
+
+        # Reset count if window expired since first blink
+        if self.blink_count > 0 and (now - self.last_blink_time) > self.double_blink_window:
+            self.blink_count = 0
+
+        # Dynamic thresholds based on adaptive open-eye baseline
+        if not self.eyes_closed:
+            if blink_score < 0.30:
+                self.baseline_open = 0.90 * self.baseline_open + 0.10 * blink_score
+
+        activate_thresh = max(0.35, self.baseline_open + 0.20)
+        release_thresh = max(0.20, self.baseline_open + 0.08)
+
+        # 1. Eyes closing transition
+        if not self.eyes_closed and blink_score >= activate_thresh:
+            self.eyes_closed = True
+            self.close_start_time = now
+            self.peak_blink_score = blink_score
+
+        # 2. While eyes are closed, track peak and watch for reopening
+        elif self.eyes_closed:
+            self.peak_blink_score = max(self.peak_blink_score, blink_score)
+
+            # Eyes opening transition: score drops below release_thresh OR drops significantly from peak
+            has_opened = (blink_score <= release_thresh) or (blink_score <= self.peak_blink_score * 0.55)
+
+            if has_opened:
+                self.eyes_closed = False
+                duration = now - self.close_start_time
+
+                # Check if blink duration is within intentional blink limits
+                if self.min_blink_duration <= duration <= self.max_blink_duration and self.peak_blink_score >= 0.38:
+                    self.blink_count += 1
+                    self.last_blink_time = now
+
+                    if self.blink_count >= 2:
+                        # Double blink SUCCESS!
+                        self.blink_count = 0
+                        self.cooldown_end_time = now + self.cooldown
+                        if self.on_double_blink:
+                            self.on_double_blink()
+                        return True
+
+        return False
+
+
 class CursorTracker:
     """Project Gameface-inspired head pose to smooth cursor motion pipeline.
     
@@ -155,19 +240,43 @@ class CursorTracker:
         self,
         sensitivity_x: float = 35.0,
         sensitivity_y: float = 30.0,
-        curve_exponent: float = 1.4,
-        deadzone_deg: float = 0.8,
+        curve_exponent: float = 1.8,
+        deadzone_deg: float = 2.5,
         screen_width: int = 1920,
         screen_height: int = 1080,
-        invert_x: bool = False,
+        invert_x: bool = True,
         invert_y: bool = False,
         enable_dwell: bool = True,
         dwell_time_ms: float = 650.0,
+        angle_range_x: float = 20.0,
+        angle_range_y: float = 15.0,
+        auto_calibrate: bool = False,
+        enable_blink: bool = True,
+        on_double_blink: Optional[Callable[[], None]] = None,
     ):
+        # Legacy delta-based sensitivity params (kept for API compat)
         self.sensitivity_x = sensitivity_x
         self.sensitivity_y = sensitivity_y
         self.curve_exponent = curve_exponent
         self.deadzone_deg = deadzone_deg
+
+        # Absolute mapping: head angle range that spans full screen.
+        # e.g. angle_range_x=20 means tilting head 20° left/right reaches screen edges comfortably.
+        self.angle_range_x = max(1.0, angle_range_x)
+        self.angle_range_y = max(1.0, angle_range_y)
+
+        # Auto-detect native display resolution on Windows
+        import os
+        if os.name == "nt" and screen_width == 1920 and screen_height == 1080:
+            try:
+                import ctypes
+                w = ctypes.windll.user32.GetSystemMetrics(0)
+                h = ctypes.windll.user32.GetSystemMetrics(1)
+                if w > 0 and h > 0:
+                    screen_width, screen_height = w, h
+            except Exception:
+                pass
+
         self.screen_width = screen_width
         self.screen_height = screen_height
         self.invert_x = invert_x
@@ -177,29 +286,45 @@ class CursorTracker:
         self.cursor_x = float(screen_width // 2)
         self.cursor_y = float(screen_height // 2)
 
-        # Sub-pixel accumulator
-        self._rem_x = 0.0
-        self._rem_y = 0.0
-
-        # Calibrated neutral head angles
+        # Calibrated neutral head angles & auto-calibration
         self.neutral_yaw = 0.0
         self.neutral_pitch = 0.0
+        self.auto_calibrate = auto_calibrate
+        self.calibrated = not auto_calibrate
+        self._calib_samples: list[Tuple[float, float]] = []
+        self._calib_target_samples = 20
 
-        # One-Euro filters for velocity stability
-        self.filter_yaw = OneEuroFilter(freq=60.0, min_cutoff=1.2, beta=0.012)
-        self.filter_pitch = OneEuroFilter(freq=60.0, min_cutoff=1.2, beta=0.012)
+        # One-Euro filters — ultra-low min_cutoff aggressively kills standstill noise.
+        # beta controls speed-dependent cutoff: low beta = smoother tracking at cost of lag.
+        # min_cutoff=0.05 → near-zero noise when head is still; beta=0.003 → smooth motion.
+        self.filter_yaw = OneEuroFilter(freq=60.0, min_cutoff=0.05, beta=0.003)
+        self.filter_pitch = OneEuroFilter(freq=60.0, min_cutoff=0.05, beta=0.003)
 
         # Dwell clicker integration
         self.dwell_clicker: Optional[DwellClicker] = (
             DwellClicker(dwell_time_ms=dwell_time_ms) if enable_dwell else None
         )
 
+        # Double blink detector integration
+        self.blink_detector: Optional[DoubleBlinkDetector] = (
+            DoubleBlinkDetector(on_double_blink=on_double_blink) if enable_blink else None
+        )
+
     def set_neutral(self, yaw: float, pitch: float) -> None:
         """Sets the zero-point reference for head aiming."""
         self.neutral_yaw = yaw
         self.neutral_pitch = pitch
+        self.calibrated = True
         self.filter_yaw.reset()
         self.filter_pitch.reset()
+
+    def recenter(self, yaw: Optional[float] = None, pitch: Optional[float] = None) -> None:
+        """Recenters head aiming to provided angles or re-triggers auto-calibration."""
+        if yaw is not None and pitch is not None:
+            self.set_neutral(yaw, pitch)
+        else:
+            self.calibrated = False
+            self._calib_samples = []
 
     def _apply_acceleration(self, displacement_deg: float) -> float:
         """Applies deadzone and nonlinear power acceleration transfer function."""
@@ -216,46 +341,91 @@ class CursorTracker:
         raw_pitch: float,
         timestamp: Optional[float] = None,
     ) -> Tuple[int, int, Tuple[float, float], Optional[DwellStatus]]:
-        """Processes head pose into integer mouse step deltas (dx, dy), 
+        """Processes head pose into integer mouse step deltas (dx, dy),
         absolute cursor coordinates (x, y), and dwell status.
-        
-        Returns:
-            (delta_x, delta_y, (cursor_x, cursor_y), dwell_status)
+
+        Uses absolute angle-to-screen mapping with Gameface power curve:
+          head tilt of ±angle_range_x degrees → cursor at screen left/right edge
+          head tilt of ±angle_range_y degrees → cursor at screen top/bottom edge
         """
         now = timestamp if timestamp is not None else time.time()
 
         smooth_yaw = self.filter_yaw.filter(raw_yaw, now)
         smooth_pitch = self.filter_pitch.filter(raw_pitch, now)
 
-        # Displacements from neutral
+        # Handle auto-calibration on startup
+        if self.auto_calibrate and not self.calibrated:
+            self._calib_samples.append((smooth_yaw, smooth_pitch))
+            if len(self._calib_samples) >= self._calib_target_samples:
+                avg_y = sum(s[0] for s in self._calib_samples) / len(self._calib_samples)
+                avg_p = sum(s[1] for s in self._calib_samples) / len(self._calib_samples)
+                self.set_neutral(avg_y, avg_p)
+            else:
+                self.cursor_x = float(self.screen_width // 2)
+                self.cursor_y = float(self.screen_height // 2)
+                return 0, 0, (self.cursor_x, self.cursor_y), None
+
+        # Displacement from calibrated neutral
         disp_yaw = smooth_yaw - self.neutral_yaw
         disp_pitch = smooth_pitch - self.neutral_pitch
 
-        # Apply Gameface curve
-        curved_yaw = self._apply_acceleration(disp_yaw)
-        curved_pitch = self._apply_acceleration(disp_pitch)
-
         # Inversion
         if self.invert_x:
-            curved_yaw = -curved_yaw
+            disp_yaw = -disp_yaw
         if self.invert_y:
-            curved_pitch = -curved_pitch
+            disp_pitch = -disp_pitch
 
-        # Compute raw continuous pixel movement
-        raw_dx = curved_yaw * (self.sensitivity_x / 10.0)
-        raw_dy = curved_pitch * (self.sensitivity_y / 10.0)
+        # Power curve mapping within [-angle_range, +angle_range]
+        def _map_axis(disp: float, angle_range: float) -> float:
+            abs_d = abs(disp)
+            if abs_d <= self.deadzone_deg:
+                return 0.0
+            span = max(0.1, angle_range - self.deadzone_deg)
+            linear_norm = min(1.0, (abs_d - self.deadzone_deg) / span)
+            curved = linear_norm ** self.curve_exponent
+            return math.copysign(curved, disp)
 
-        # Sub-pixel accumulation
-        total_dx = raw_dx + self._rem_x
-        total_dy = raw_dy + self._rem_y
-        int_dx = int(total_dx)
-        int_dy = int(total_dy)
-        self._rem_x = total_dx - int_dx
-        self._rem_y = total_dy - int_dy
+        eff_x = _map_axis(disp_yaw, self.angle_range_x)
+        eff_y = _map_axis(disp_pitch, self.angle_range_y)
 
-        # Update absolute cursor clamp
-        self.cursor_x = max(0.0, min(float(self.screen_width - 1), self.cursor_x + int_dx))
-        self.cursor_y = max(0.0, min(float(self.screen_height - 1), self.cursor_y + int_dy))
+        norm_x = (eff_x + 1.0) / 2.0
+        norm_y = (eff_y + 1.0) / 2.0
+        norm_x = max(0.0, min(1.0, norm_x))
+        norm_y = max(0.0, min(1.0, norm_y))
+
+        target_x = norm_x * float(self.screen_width - 1)
+        target_y = norm_y * float(self.screen_height - 1)
+
+        prev_x = self.cursor_x
+        prev_y = self.cursor_y
+
+        # Velocity-weighted adaptive screen-space dampening & tremor elimination
+        dist = math.hypot(target_x - prev_x, target_y - prev_y)
+        if dist < 4.0:
+            # Stiff / stationary head: freeze micro-tremor completely (wider dead-band)
+            new_x = prev_x
+            new_y = prev_y
+        elif dist < 15.0:
+            # Fine aiming: very heavy low-pass for razor-sharp precision targeting
+            alpha = 0.12
+            new_x = prev_x + (target_x - prev_x) * alpha
+            new_y = prev_y + (target_y - prev_y) * alpha
+        elif dist < 80.0:
+            # Normal movement: silky smooth progressive transition
+            alpha = 0.35
+            new_x = prev_x + (target_x - prev_x) * alpha
+            new_y = prev_y + (target_y - prev_y) * alpha
+        else:
+            # Fast flick: responsive tracking without perceptible lag
+            alpha = 0.65
+            new_x = prev_x + (target_x - prev_x) * alpha
+            new_y = prev_y + (target_y - prev_y) * alpha
+
+        self.cursor_x = new_x
+        self.cursor_y = new_y
+
+        int_dx = int(new_x - prev_x)
+        int_dy = int(new_y - prev_y)
 
         dwell_status = None
         if self.dwell_clicker:

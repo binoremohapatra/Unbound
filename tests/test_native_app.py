@@ -12,6 +12,8 @@ from __future__ import annotations
 
 import os
 import pytest
+
+pyside6 = pytest.importorskip("PySide6", reason="PySide6 GUI toolkit not installed")
 from PySide6.QtWidgets import QApplication
 from PySide6.QtCore import Qt
 

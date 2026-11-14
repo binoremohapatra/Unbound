@@ -1,23 +1,28 @@
-"""On-Screen Keyboard (OSK) with Dwell Typing & Word Prediction.
+"""On-Screen Keyboard (OSK) with Dwell Typing, Smart Prediction & Accessibility.
 
-Abstracted and synthesized from OptiKey (OptiKey/OptiKey):
+Abstracted and synthesized from OptiKey:
   - Accessible QWERTY & control key layout designed for head/eye tracking
   - Dwell-time key actuation engine with dwell progress feedback (0.0 -> 1.0)
-  - Real-time word prediction & autocomplete engine (Trie / frequency based)
-  - Text-to-Speech (TTS) readout integration
-  - Text injection into active Windows foreground applications via SendInput
+  - Real-time AI smart prediction: prefix autocomplete, context-aware next-word suggestions
+  - Quick phrase library & persistent personal dictionary
+  - Text-to-Speech (TTS) readout integration with multi-backend fallback
+  - Text injection into active Windows foreground applications
 """
 
 from __future__ import annotations
 
+from collections import Counter
+import json
 import logging
+from pathlib import Path
+import subprocess
 import time
 from dataclasses import dataclass, field
 from typing import Callable, List, Optional, Set, Tuple
 
 logger = logging.getLogger("handsfree.osk")
 
-# High-frequency dictionary for word prediction (OptiKey-style)
+# High-frequency dictionary for word prediction
 COMMON_WORDS = [
     "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not",
     "on", "with", "he", "as", "you", "do", "at", "this", "but", "his", "by", "from",
@@ -30,15 +35,43 @@ COMMON_WORDS = [
     "way", "even", "new", "want", "because", "any", "these", "give", "day", "most",
     "us", "great", "hello", "help", "please", "thank", "yes", "water", "food", "pain",
     "tired", "stop", "play", "game", "computer", "keyboard", "controller", "unbound",
-    "handsfree", "accessible", "mouse", "click", "turn", "speed", "drive", "pause"
+    "handsfree", "accessible", "mouse", "click", "turn", "speed", "drive", "pause",
+    "urgently", "ready", "doctor", "medicine", "open", "close", "fine", "call"
 ]
+
+QUICK_PHRASES = [
+    "I need help.",
+    "Please call someone.",
+    "I am fine.",
+    "I need water.",
+    "Please open this.",
+    "I want to communicate.",
+    "Thank you.",
+    "Yes please.",
+    "No thank you.",
+    "Can you assist me?"
+]
+
+# Context-aware n-gram transitions
+CONTEXT_PREDICTIONS = {
+    ("how", "are"): ["you", "we", "things", "they"],
+    ("how",): ["are", "is", "do", "can", "much"],
+    ("i", "need", "help"): ["please", "urgently", "now", "here"],
+    ("i", "need"): ["help", "water", "food", "rest", "medicine", "someone"],
+    ("i", "am"): ["fine", "okay", "tired", "ready", "here", "good"],
+    ("i", "want"): ["to", "water", "help", "food", "this"],
+    ("please"): ["help", "call", "open", "come", "wait", "give"],
+    ("thank"): ["you", "so", "very"],
+    ("can", "you"): ["help", "please", "call", "open", "read"],
+    ("open"): ["google", "youtube", "notepad", "keyboard", "settings"],
+}
 
 
 class WordPredictor:
-    """Trie-based prefix predictive text engine."""
+    """Trie-based prefix predictive text engine (Original OptiKey-style, maintained for compat)."""
 
     def __init__(self, vocab: Optional[List[str]] = None):
-        self.words = vocab or COMMON_WORDS
+        self.words = list(vocab) if vocab else list(COMMON_WORDS)
         self.word_set = set(self.words)
 
     def predict(self, prefix: str, max_results: int = 5) -> List[str]:
@@ -54,6 +87,117 @@ class WordPredictor:
                 if len(matches) >= max_results:
                     break
         return matches
+
+
+class SmartKeyboardEngine:
+    """Upgraded AI Smart Prediction Engine with context-awareness, autocomplete,
+
+    frequently-used phrases, and persistent personal vocabulary.
+    """
+
+    PERSONAL_DICT_PATH = Path(__file__).resolve().parent.parent / "data" / "personal_dict.json"
+
+    def __init__(self, vocab: Optional[List[str]] = None):
+        self.base_vocab: List[str] = list(vocab) if vocab else list(COMMON_WORDS)
+        self.personal_words: List[str] = []
+        self.quick_phrases: List[str] = list(QUICK_PHRASES)
+        self.usage_counts: Counter[str] = Counter()
+        self._load_personal_dictionary()
+
+    def _load_personal_dictionary(self) -> None:
+        try:
+            if self.PERSONAL_DICT_PATH.exists():
+                data = json.loads(self.PERSONAL_DICT_PATH.read_text(encoding="utf-8"))
+                self.personal_words = [w.lower().strip() for w in data.get("custom_words", []) if w]
+                saved_phrases = data.get("quick_phrases", [])
+                if saved_phrases:
+                    self.quick_phrases = saved_phrases
+        except Exception as e:
+            logger.warning(f"Could not load personal dictionary: {e}")
+
+    def save_personal_dictionary(self) -> None:
+        try:
+            self.PERSONAL_DICT_PATH.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "custom_words": sorted(list(set(self.personal_words))),
+                "quick_phrases": self.quick_phrases,
+            }
+            self.PERSONAL_DICT_PATH.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        except Exception as e:
+            logger.error(f"Error saving personal dictionary: {e}")
+
+    def add_word(self, word: str) -> bool:
+        clean = word.strip().lower()
+        if clean and clean not in self.personal_words:
+            self.personal_words.append(clean)
+            self.save_personal_dictionary()
+            return True
+        return False
+
+    def remove_word(self, word: str) -> bool:
+        clean = word.strip().lower()
+        if clean in self.personal_words:
+            self.personal_words.remove(clean)
+            self.save_personal_dictionary()
+            return True
+        return False
+
+    def record_selection(self, word: str) -> None:
+        clean = word.strip().lower()
+        if clean:
+            self.usage_counts[clean] += 1
+
+    def predict(self, text_or_prefix: str, max_results: int = 5) -> List[str]:
+        """Provides dynamic 3-5 word suggestions considering context & current word prefix."""
+        text = text_or_prefix.lower()
+        tokens = text.strip().split()
+        is_trailing_space = text.endswith(" ") or not text.strip()
+        current_token = "" if is_trailing_space else (tokens[-1] if tokens else "")
+
+        results: List[str] = []
+
+        # 1. Autocomplete current prefix if actively typing a word
+        all_vocab = self.personal_words + self.base_vocab
+        if current_token:
+            prefix_matches = [
+                w for w in all_vocab
+                if w.startswith(current_token) and w != current_token
+            ]
+            # Prioritize by usage frequency then length
+            prefix_matches.sort(key=lambda w: (-self.usage_counts[w], len(w)))
+            results.extend(prefix_matches)
+
+        # 2. Context-aware next-word suggestions
+        # Check trigram/bigram context
+        context_words = tokens if is_trailing_space else tokens[:-1]
+        if len(context_words) >= 3:
+            trigram = tuple(context_words[-3:])
+            if trigram in CONTEXT_PREDICTIONS:
+                results.extend(CONTEXT_PREDICTIONS[trigram])
+        if len(context_words) >= 2:
+            bigram = tuple(context_words[-2:])
+            if bigram in CONTEXT_PREDICTIONS:
+                results.extend(CONTEXT_PREDICTIONS[bigram])
+        if len(context_words) >= 1:
+            unigram = (context_words[-1],)
+            if unigram in CONTEXT_PREDICTIONS:
+                results.extend(CONTEXT_PREDICTIONS[unigram])
+
+        # 3. Frequency-based fallbacks
+        fallbacks = ["the", "i", "help", "water", "please", "yes", "no", "thank", "you"]
+        results.extend(fallbacks)
+
+        # Deduplicate while preserving order
+        deduped: List[str] = []
+        seen = set()
+        for r in results:
+            if r and r not in seen and r != current_token:
+                seen.add(r)
+                deduped.append(r)
+                if len(deduped) >= max_results:
+                    break
+
+        return deduped
 
 
 @dataclass
@@ -91,11 +235,11 @@ KEYBOARD_LAYOUT: List[List[KeyDef]] = [
 
 
 class OnScreenKeyboardEngine:
-    """Dwell-time accessible typing engine with word prediction and TTS."""
+    """Dwell-time accessible typing engine with AI smart prediction, quick phrases and TTS."""
 
     def __init__(
         self,
-        dwell_time_ms: float = 550.0,
+        dwell_time_ms: float = 1500.0,
         cooldown_ms: float = 350.0,
         on_text_updated: Optional[Callable[[str], None]] = None,
         on_key_actuated: Optional[Callable[[str], None]] = None,
@@ -106,8 +250,10 @@ class OnScreenKeyboardEngine:
         self.on_key_actuated = on_key_actuated
 
         self.text_buffer = ""
-        self.predictor = WordPredictor()
-        self.predictions: List[str] = self.predictor.predict("")
+        self.smart_predictor = SmartKeyboardEngine()
+        # Keep predictor attribute pointing to SmartKeyboardEngine for full compatibility
+        self.predictor = self.smart_predictor
+        self.predictions: List[str] = self.smart_predictor.predict("")
 
         # Dwell tracking state
         self.active_key: Optional[str] = None
@@ -123,25 +269,53 @@ class OnScreenKeyboardEngine:
         return tokens[-1] if tokens else ""
 
     def _update_predictions(self) -> None:
-        current = self.get_current_word()
-        self.predictions = self.predictor.predict(current)
+        self.predictions = self.smart_predictor.predict(self.text_buffer)
 
     def select_prediction(self, word: str) -> None:
         """Applies word prediction completion."""
+        clean_word = word.strip()
         current = self.get_current_word()
         if current:
             # Replace prefix with full word
-            self.text_buffer = self.text_buffer[:-len(current)] + word + " "
+            self.text_buffer = self.text_buffer[:-len(current)] + clean_word + " "
         else:
-            self.text_buffer += word + " "
+            if self.text_buffer and not self.text_buffer.endswith(" "):
+                self.text_buffer += " "
+            self.text_buffer += clean_word + " "
 
+        self.smart_predictor.record_selection(clean_word)
         self._update_predictions()
         if self.on_text_updated:
             self.on_text_updated(self.text_buffer)
 
+    def apply_quick_phrase(self, phrase: str) -> None:
+        """Appends a quick preset phrase to the text buffer."""
+        clean = phrase.strip()
+        if not clean:
+            return
+        if self.text_buffer and not self.text_buffer.endswith(" "):
+            self.text_buffer += " "
+        self.text_buffer += clean + " "
+        self._update_predictions()
+        if self.on_text_updated:
+            self.on_text_updated(self.text_buffer)
+
+    def add_personal_word(self, word: str) -> bool:
+        ok = self.smart_predictor.add_word(word)
+        self._update_predictions()
+        return ok
+
+    def remove_personal_word(self, word: str) -> bool:
+        ok = self.smart_predictor.remove_word(word)
+        self._update_predictions()
+        return ok
+
+    def get_quick_phrases(self) -> List[str]:
+        return self.smart_predictor.quick_phrases
+
     def hover_key(self, key_label: Optional[str], timestamp: Optional[float] = None) -> float:
         """Updates dwell state when the cursor hovers over a key.
-        
+
         Returns:
             Dwell progress (0.0 to 1.0)
         """
@@ -203,17 +377,30 @@ class OnScreenKeyboardEngine:
             self.on_text_updated(self.text_buffer)
 
     def speak_text(self, text: str) -> None:
-        """Speaks the text buffer aloud via TTS."""
+        """Speaks text aloud via TTS with multi-tier fallback."""
         if not text.strip():
             return
-        logger.info(f"[TTS SPEAK]: {text}")
+        clean_text = text.strip()
+        logger.info(f"[TTS SPEAK]: {clean_text}")
+
+        # Attempt 1: pyttsx3
         try:
             import pyttsx3
             engine = pyttsx3.init()
-            engine.say(text)
+            engine.say(clean_text)
             engine.runAndWait()
+            return
         except Exception:
-            # Fallback log or OS TTS
+            pass
+
+        # Attempt 2: Windows PowerShell SAPI (Standard on Windows 10/11)
+        try:
+            safe_text = clean_text.replace("'", "''").replace('"', '`"')
+            cmd = f"$voice = New-Object -ComObject SAPI.SpVoice; $voice.Speak('{safe_text}')"
+            subprocess.Popen(["powershell", "-NoProfile", "-NonInteractive", "-Command", cmd],
+                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return
+        except Exception:
             pass
 
     def inject_text(self, text: str) -> None:
@@ -224,6 +411,18 @@ class OnScreenKeyboardEngine:
         try:
             import pydirectinput
             pydirectinput.write(text, interval=0.01)
+            return
         except Exception:
             pass
 
+        # Native Windows SendInput fallback
+        try:
+            import ctypes
+            for char in text:
+                vk = ctypes.windll.user32.VkKeyScanW(ord(char))
+                if vk != -1:
+                    code = vk & 0xFF
+                    ctypes.windll.user32.keybd_event(code, 0, 0, 0)
+                    ctypes.windll.user32.keybd_event(code, 0, 2, 0)
+        except Exception as e:
+            logger.debug(f"Native SendInput fallback: {e}")

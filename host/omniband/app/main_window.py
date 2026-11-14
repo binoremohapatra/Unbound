@@ -63,6 +63,8 @@ class MainWindow(QMainWindow):
     sig_ble_connection = Signal(bool, str)
     sig_ble_metrics = Signal(int, float)
     sig_ble_frame = Signal(list, list, int)
+    sig_imu_motion = Signal(float, float)
+    sig_hw_status = Signal(str)
     sig_text_focus = Signal(bool)
     sig_prune_telemetry = Signal(dict)
     sig_prune_output = Signal(str, bool)
@@ -151,10 +153,11 @@ class MainWindow(QMainWindow):
         self._lbl_tier.setFont(QFont("Cascadia Code", 10, QFont.Bold))
         self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
-        self._btn_scan_ble = QPushButton("🔵 Scan / Connect BLE Headband")
+        self._btn_scan_ble = QPushButton("🔵 Connect Hardware (BLE / USB)")
+        self._btn_scan_ble.setToolTip("Auto-detects USB COM port first, then scans BLE for OmniBand / ESP32")
         self._btn_scan_ble.clicked.connect(self._on_scan_ble_clicked)
 
-        self._lbl_ble_metrics = QLabel("BLE: Disconnected")
+        self._lbl_ble_metrics = QLabel("Hardware: Disconnected")
         self._lbl_ble_metrics.setFont(QFont("Cascadia Code", 9))
         self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
 
@@ -417,17 +420,20 @@ class MainWindow(QMainWindow):
         )
         self.focus_watcher.start()
 
-        # Connect BLE Signals
+        # Connect Hardware Signals (BLE / USB Serial)
         self.sig_ble_connection.connect(self._on_ble_connection_event)
         self.sig_ble_metrics.connect(self._on_ble_metrics_event)
         self.sig_ble_frame.connect(self._on_ble_frame_event)
+        self.sig_imu_motion.connect(self._on_imu_motion_event)
+        self.sig_hw_status.connect(self._on_hw_status_event)
 
-        # Native BLE Client for OmniBand Headband
+        # Unified Hardware Transport Manager for OmniBand Headband
         self.ble_client = OmniBandBleClient(
             calibrator=self.calibrator,
             on_somatic_frame=lambda ch, act, seq: self.sig_ble_frame.emit(ch, act, seq),
             on_connection_change=lambda conn, name: self.sig_ble_connection.emit(conn, name),
             on_metrics_update=lambda rssi, rate: self.sig_ble_metrics.emit(rssi, rate),
+            on_imu_motion=lambda dx, dy: self.sig_imu_motion.emit(dx, dy),
         )
         self.ble_client.start()
 
@@ -1143,30 +1149,50 @@ class MainWindow(QMainWindow):
         )
 
     def _on_scan_ble_clicked(self) -> None:
-        self.calib.append_log("Operator triggered BLE Scan / Connect.")
-        self.status.showMessage("Scanning for OmniBand-BLE headband...", 3000)
-        self.ble_client.trigger_scan_connect()
+        self.calib.append_log("Operator triggered Hybrid Hardware Connect (BLE / USB).")
+        self.status.showMessage("Scanning USB COM ports & BLE...", 3000)
+        self.ble_client.trigger_hybrid_connect()
+
+    def _on_hw_status_event(self, status_msg: str) -> None:
+        self.status.showMessage(status_msg, 3000)
+        self.calib.append_log(f"HW: {status_msg}")
+
+    def _on_imu_motion_event(self, dx: float, dy: float) -> None:
+        """Route hardware IMU relative motion directly into Windows cursor."""
+        if dx != 0.0 or dy != 0.0:
+            self.gw.move_cursor_relative(dx, dy)
 
     def _on_ble_connection_event(self, connected: bool, message: str) -> None:
+        transport = getattr(self.ble_client, "transport_type", "BLE")
         if connected:
-            self._lbl_ble_metrics.setText(f"BLE: Connected")
-            self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-            self.status.showMessage(f"🔵 BLE HEADBAND CONNECTED: {message}", 4000)
-            self.calib.append_log(f"BLE CONNECTED: {message}")
+            if transport == "USB":
+                self._lbl_ble_metrics.setText("🟢 USB: Connected")
+                self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+                self.status.showMessage(f"🟢 {message}", 4000)
+                self.calib.append_log(f"HARDWARE CONNECTED: {message}")
+            else:
+                self._lbl_ble_metrics.setText("🟢 BLE: Connected")
+                self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+                self.status.showMessage(f"🔵 {message}", 4000)
+                self.calib.append_log(f"HARDWARE CONNECTED: {message}")
             self._update_tier_badge()
         else:
-            self._lbl_ble_metrics.setText("BLE: Disconnected")
+            self._lbl_ble_metrics.setText("Hardware: Disconnected")
             self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-            self.status.showMessage(f"BLE Disconnected ({message}). Falling back...", 3000)
-            self.calib.append_log(f"BLE DISCONNECTED: {message}")
+            self.status.showMessage(f"Hardware Disconnected ({message}).", 3000)
+            self.calib.append_log(f"HARDWARE DISCONNECTED: {message}")
             # Safe handoff: release all inputs within < 150ms grace
-            self.gw.release_all("BLE disconnect failsafe")
+            self.gw.release_all("Hardware disconnect failsafe")
             self._update_tier_badge()
         self.calib.set_ble_metrics(connected, message, self.ble_client.rssi, self.ble_client.packet_rate)
 
     def _on_ble_metrics_event(self, rssi: int, rate: float) -> None:
-        self._lbl_ble_metrics.setText(f"BLE: {rate:.1f} pkt/s | {rssi} dBm")
-        self.calib.set_ble_metrics(self.ble_client.is_connected, "OmniBand-BLE", rssi, rate)
+        transport = getattr(self.ble_client, "transport_type", "BLE")
+        if transport == "USB":
+            self._lbl_ble_metrics.setText(f"USB: {rate:.1f} pkt/s")
+        else:
+            self._lbl_ble_metrics.setText(f"BLE: {rate:.1f} pkt/s | {rssi} dBm")
+        self.calib.set_ble_metrics(self.ble_client.is_connected, f"OmniBand-{transport}", rssi, rate)
 
     def _on_ble_frame_event(self, ch_vals: list[float], active: list[bool], seq: int) -> None:
         # Feed calibration wizard if active
@@ -1185,20 +1211,21 @@ class MainWindow(QMainWindow):
                 self._on_physical_edge(i + 1, act, ch_vals[i])
 
     def _update_tier_badge(self) -> None:
-        ble_on = self.ble_client.is_connected
+        hw_on = self.ble_client.is_connected
+        transport = getattr(self.ble_client, "transport_type", "BLE")
         opt_on = self.webcam_tracker.head_mouse_enabled and self.webcam_tracker.is_alive()
 
-        if ble_on and opt_on:
-            self._lbl_tier.setText("ACTIVE: TIER 2 (BLE + OPTICAL HYBRID)")
+        if hw_on and opt_on:
+            self._lbl_tier.setText(f"ACTIVE: TIER 2 ({transport} + OPTICAL HYBRID)")
             self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
-        elif ble_on:
-            self._lbl_tier.setText("ACTIVE: TIER 1 (BLE WIRELESS)")
+        elif hw_on:
+            self._lbl_tier.setText(f"ACTIVE: TIER 1 ({transport})")
             self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         elif opt_on:
             self._lbl_tier.setText("ACTIVE: TIER 3 (OPTICAL)")
             self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         else:
-            self._lbl_tier.setText("ACTIVE: TIER 1 (USB)")
+            self._lbl_tier.setText("ACTIVE: TIER 1 (OFFLINE)")
             self._lbl_tier.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
     def _set_assist_level(self, level: str) -> None:

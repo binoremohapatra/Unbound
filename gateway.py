@@ -490,6 +490,17 @@ class Gateway:
             self._want_mouse.discard(button)
             self._sync_locked()
 
+    def move_cursor_relative(self, dx: int | float, dy: int | float) -> None:
+        """Inject relative cursor motion directly via backend."""
+        idx = int(round(dx))
+        idy = int(round(dy))
+        if idx or idy:
+            with self._lock:
+                if hasattr(self.backend, "mouse_move"):
+                    self.backend.mouse_move(idx, idy)
+                if hasattr(self.backend, "commit"):
+                    self.backend.commit()
+
     def show_microsoft_keyboard(self, target_hwnd: int = 0) -> bool:
         """Launch Microsoft Windows Native Keyboard (TabTip/OSK)."""
         return show_microsoft_keyboard(target_hwnd)

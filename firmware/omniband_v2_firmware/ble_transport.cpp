@@ -1,6 +1,10 @@
 // ble_transport.cpp - Ultra-Fast GATT Telemetry Server for OmniBand V2 & Unbound Desktop
 #include "ble_transport.h"
 #include "hw_config.h"
+#include <esp_system.h>
+#if __has_include(<esp_mac.h>)
+#include <esp_mac.h>
+#endif
 
 OmniBandBleServer g_ble;
 
@@ -9,6 +13,15 @@ static const char* CHAR_UUID    = "beb5483e-36e1-4688-b7f5-ea07361b26a6";
 
 void OmniBandBleServer::begin() {
     Serial.printf("[BLE] Initializing OmniBand BLE Server '%s'...\n", omniband::hw::BT_DEVICE_NAME);
+
+    // Increment MAC address by +1 to guarantee Windows sees a fresh unbonded device,
+    // bypassing any stale bonding keys cached in Windows Registry.
+    uint8_t baseMac[6];
+    if (esp_read_mac(baseMac, ESP_MAC_BT) == ESP_OK) {
+        baseMac[5] = (baseMac[5] == 0xFF) ? 0x01 : (baseMac[5] + 1);
+        esp_base_mac_addr_set(baseMac);
+    }
+
     BLEDevice::init(omniband::hw::BT_DEVICE_NAME);
 
     // 1. Create GATT Server
@@ -28,12 +41,21 @@ void OmniBandBleServer::begin() {
     pChar_->setValue("OmniBand Ready");
     pService->start();
 
-    // 3. Clean Standard BLE Advertising (Fits strictly within 31-byte frame limit)
+    // 3. Clean Standard BLE Advertising (Strictly splits adv and scan response data to never exceed 31 bytes)
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->addServiceUUID(SERVICE_UUID);
+
+    BLEAdvertisementData advData;
+    advData.setFlags(0x06); // BR_EDR_NOT_SUPPORTED | LE_GENERAL_DISC_MODE
+    advData.setName(omniband::hw::BT_DEVICE_NAME);
+    pAdvertising->setAdvertisementData(advData);
+
+    BLEAdvertisementData scanResponseData;
+    scanResponseData.setCompleteServices(BLEUUID(SERVICE_UUID));
+    pAdvertising->setScanResponseData(scanResponseData);
+
     pAdvertising->setScanResponse(true);
     pAdvertising->setMinPreferred(0x06); // 7.5ms fast connection interval
-    pAdvertising->setMinPreferred(0x12); // 22.5ms max interval
+    pAdvertising->setMaxPreferred(0x12); // 22.5ms max interval
     BLEDevice::startAdvertising();
 
     Serial.printf("[BLE] Advertising started successfully for '%s'!\n", omniband::hw::BT_DEVICE_NAME);

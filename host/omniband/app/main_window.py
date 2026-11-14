@@ -437,6 +437,7 @@ class MainWindow(QMainWindow):
             on_metrics_update=lambda rssi, rate: self.sig_ble_metrics.emit(rssi, rate),
             on_imu_motion=lambda dx, dy: self.sig_imu_motion.emit(dx, dy),
             on_hardware_gesture=lambda g: self.sig_hw_gesture.emit(g),
+            on_status_change=lambda msg: self.sig_hw_status.emit(msg),
         )
         self.ble_client.start()
 

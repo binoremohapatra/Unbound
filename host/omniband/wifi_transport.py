@@ -260,12 +260,17 @@ class OmniBandWifiClient:
                 if not data:
                     continue
 
+                # Parse payload first — discard ping/pong/loopback packets
+                pkt = parse_wifi_packet(data)
+                if not pkt:
+                    continue
+
                 now = time.perf_counter()
                 self._last_packet_t = now
                 self._packet_count += 1
                 self._remote_addr = addr[0]
 
-                # Update connection status edge
+                # Update connection status edge only on genuine telemetry/gesture
                 if not self._connected:
                     with self._lock:
                         self._connected = True
@@ -277,9 +282,7 @@ class OmniBandWifiClient:
                         self.on_connection_change(True, msg)
 
                 # Process payload
-                pkt = parse_wifi_packet(data)
-                if pkt:
-                    self._dispatch_packet(pkt)
+                self._dispatch_packet(pkt)
 
                 # Rate computation
                 dt = now - self._last_metrics_calc_t

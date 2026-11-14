@@ -235,11 +235,14 @@ def parse_hardware_payload(data: bytes | str) -> Optional[dict]:
     if upper_s.startswith("G,") or upper_s.startswith("GESTURE,"):
         parts = upper_s.split(",")
         upper_s = parts[1].strip()
+    elif upper_s.startswith("SCROLL,"):
+        upper_s = "SCROLL"
 
     valid_triggers = {
-        "CLICK", "LEFT", "RIGHT", "SCROLL", "CH1", "CH2", "CH3", "CH4",
+        "CLICK", "LEFT", "RIGHT", "MIDDLE", "SCROLL", "CH1", "CH2", "CH3", "CH4",
         "JAW_TAP", "JAW_HOLD", "DOUBLE_CLENCH", "RIGHT_CLENCH", "LEFT_CLENCH",
-        "BROW_RAISE", "NOD", "HOLD", "LEFT_EYE", "SMILE", "CHEEK_PUFF"
+        "BROW_RAISE", "NOD", "HOLD", "DRAG", "DRAG_ON", "DRAG_OFF",
+        "LEFT_EYE", "SMILE", "CHEEK_PUFF"
     }
     if upper_s in valid_triggers:
         return {

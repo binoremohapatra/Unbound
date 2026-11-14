@@ -1,111 +1,56 @@
-// ble_transport.cpp - Native BLE HID Mouse + GATT Telemetry Server for OmniBand V2
+// ble_transport.cpp - Ultra-Fast GATT Telemetry Server for OmniBand V2 & Unbound Desktop
 #include "ble_transport.h"
 #include "hw_config.h"
 
 OmniBandBleServer g_ble;
 
-// Standard USB HID Mouse Report Descriptor (Report ID 1)
-static const uint8_t hidReportMap[] = {
-    0x05, 0x01,                    // USAGE_PAGE (Generic Desktop)
-    0x09, 0x02,                    // USAGE (Mouse)
-    0xa1, 0x01,                    // COLLECTION (Application)
-    0x85, 0x01,                    //   REPORT_ID (1)
-    0x09, 0x01,                    //   USAGE (Pointer)
-    0xa1, 0x00,                    //   COLLECTION (Physical)
-    0x05, 0x09,                    //     USAGE_PAGE (Button)
-    0x19, 0x01,                    //     USAGE_MINIMUM (Button 1)
-    0x29, 0x03,                    //     USAGE_MAXIMUM (Button 3)
-    0x15, 0x00,                    //     LOGICAL_MINIMUM (0)
-    0x25, 0x01,                    //     LOGICAL_MAXIMUM (1)
-    0x95, 0x03,                    //     REPORT_COUNT (3)
-    0x75, 0x01,                    //     REPORT_SIZE (1)
-    0x81, 0x02,                    //     INPUT (Data,Var,Abs)
-    0x95, 0x01,                    //     REPORT_COUNT (1)
-    0x75, 0x05,                    //     REPORT_SIZE (5)
-    0x81, 0x03,                    //     INPUT (Cnst,Var,Abs)
-    0x05, 0x01,                    //     USAGE_PAGE (Generic Desktop)
-    0x09, 0x30,                    //     USAGE (X)
-    0x09, 0x31,                    //     USAGE (Y)
-    0x09, 0x38,                    //     USAGE (Wheel)
-    0x15, 0x81,                    //     LOGICAL_MINIMUM (-127)
-    0x25, 0x7f,                    //     LOGICAL_MAXIMUM (127)
-    0x75, 0x08,                    //     REPORT_SIZE (8)
-    0x95, 0x03,                    //     REPORT_COUNT (3)
-    0x81, 0x06,                    //     INPUT (Data,Var,Rel)
-    0xc0,                          //   END_COLLECTION
-    0xc0                           // END_COLLECTION
-};
-
-class BleSecurity : public BLESecurityCallbacks {
-    uint32_t onPassKeyRequest() { return 0; }
-    void onPassKeyNotify(uint32_t pass_key) {}
-    bool onConfirmPIN(uint32_t pass_key) { return true; }
-    bool onSecurityRequest() { return true; }
-    void onAuthenticationComplete(esp_ble_auth_cmpl_t cmpl) {}
-};
+static const char* SERVICE_UUID = "4fafc201-1fb5-459e-8fcc-c5c9c331914b";
+static const char* CHAR_UUID    = "beb5483e-36e1-4688-b7f5-ea07361b26a6";
 
 void OmniBandBleServer::begin() {
-    Serial.printf("[BLE] Starting Native Bluetooth HID Mouse '%s'...\n", omniband::hw::BT_DEVICE_NAME);
+    Serial.printf("[BLE] Initializing OmniBand BLE Server '%s'...\n", omniband::hw::BT_DEVICE_NAME);
     BLEDevice::init(omniband::hw::BT_DEVICE_NAME);
-    BLEDevice::setSecurityCallbacks(new BleSecurity());
 
-    // 1. Create Server
+    // 1. Create GATT Server
     pServer_ = BLEDevice::createServer();
     pServer_->setCallbacks(this);
 
-    // 2. Create HID Device
-    pHid_ = new BLEHIDDevice(pServer_);
-    pInputMouse_ = pHid_->inputReport(1); // Report ID 1
-
-    pHid_->manufacturer()->setValue("OmniBand");
-    pHid_->pnp(0x02, 0x045e, 0x0040, 0x0110);
-    pHid_->hidInfo(0x00, 0x02);
-    pHid_->reportMap((uint8_t*)hidReportMap, sizeof(hidReportMap));
-    pHid_->startServices();
-
-    // 3. Create Custom GATT Characteristic for Telemetry/Scope
-    BLEService* pService = pServer_->createService("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
+    // 2. Create Custom GATT Service & Characteristic for Unbound Desktop App
+    BLEService* pService = pServer_->createService(SERVICE_UUID);
     pChar_ = pService->createCharacteristic(
-        "beb5483e-36e1-4688-b7f5-ea07361b26a6",
+        CHAR_UUID,
         BLECharacteristic::PROPERTY_READ   |
         BLECharacteristic::PROPERTY_WRITE  |
         BLECharacteristic::PROPERTY_NOTIFY
     );
     pChar_->setCallbacks(this);
     pChar_->addDescriptor(new BLE2902());
-    pChar_->setValue("OmniBand HID Mouse Ready");
+    pChar_->setValue("OmniBand Ready");
     pService->start();
 
-    // 4. Advertising & Security Configuration (No PIN needed - 1-Click Connect)
-    BLESecurity* pSecurity = new BLESecurity();
-    pSecurity->setAuthenticationMode(ESP_LE_AUTH_BOND);
-    pSecurity->setCapability(ESP_IO_CAP_NONE);
-    pSecurity->setInitEncryptionKey(ESP_BLE_ENC_KEY_MASK | ESP_BLE_ID_KEY_MASK);
-
+    // 3. Clean Standard BLE Advertising (Fits strictly within 31-byte frame limit)
     BLEAdvertising* pAdvertising = BLEDevice::getAdvertising();
-    pAdvertising->setAppearance(0x03C2); // HID Mouse icon in Windows Bluetooth!
-    pAdvertising->addServiceUUID(pHid_->hidService()->getUUID());
-    pAdvertising->addServiceUUID("4fafc201-1fb5-459e-8fcc-c5c9c331914b");
+    pAdvertising->addServiceUUID(SERVICE_UUID);
     pAdvertising->setScanResponse(true);
-    pAdvertising->setMinPreferred(0x06); // Fast connection parameter
-    pAdvertising->setMinPreferred(0x12);
-    pAdvertising->start();
+    pAdvertising->setMinPreferred(0x06); // 7.5ms fast connection interval
+    pAdvertising->setMinPreferred(0x12); // 22.5ms max interval
+    BLEDevice::startAdvertising();
 
-    Serial.printf("[BLE] Native Bluetooth Mouse Advertising ON! (Name: '%s')\n", omniband::hw::BT_DEVICE_NAME);
+    Serial.printf("[BLE] Advertising started successfully for '%s'!\n", omniband::hw::BT_DEVICE_NAME);
 }
 
 void OmniBandBleServer::onConnect(BLEServer* pServer) {
     (void)pServer;
     connected_ = true;
     button_mask_ = 0;
-    Serial.println("\n>>> [BLE] PAIRED & CONNECTED DIRECTLY AS NATIVE WINDOWS MOUSE! <<<");
+    Serial.println("\n>>> [BLE] OmniBand CONNECTED to Unbound Desktop App! <<<");
 }
 
 void OmniBandBleServer::onDisconnect(BLEServer* pServer) {
     (void)pServer;
     connected_ = false;
     button_mask_ = 0;
-    Serial.println("\n[BLE] Disconnected from Windows. Re-advertising...");
+    Serial.println("\n[BLE] OmniBand Disconnected. Restarting advertising...");
     BLEDevice::startAdvertising();
 }
 
@@ -132,62 +77,54 @@ String OmniBandBleServer::pop_rx() {
 }
 
 // -----------------------------------------------------------------------------
-// NATIVE MOUSE REPORTS (Direct to OS Kernel)
+// MOUSE & GESTURE ACTIONS (Dispatched to Unbound Application)
 // -----------------------------------------------------------------------------
 void OmniBandBleServer::mouse_move(int8_t dx, int8_t dy, int8_t wheel) {
-    if (!connected_ || pInputMouse_ == nullptr) return;
-    uint8_t report[4] = {button_mask_, (uint8_t)dx, (uint8_t)dy, (uint8_t)wheel};
-    pInputMouse_->setValue(report, 4);
-    pInputMouse_->notify();
+    (void)dx; (void)dy; (void)wheel;
+    // Handled in streaming telemetry notify_frame with sub-pixel float precision
 }
 
 void OmniBandBleServer::mouse_click(uint8_t button) {
-    if (!connected_ || pInputMouse_ == nullptr) return;
-    uint8_t reportDown[4] = {(uint8_t)(button_mask_ | button), 0, 0, 0};
-    pInputMouse_->setValue(reportDown, 4);
-    pInputMouse_->notify();
-    delay(25);
-    uint8_t reportUp[4] = {button_mask_, 0, 0, 0};
-    pInputMouse_->setValue(reportUp, 4);
-    pInputMouse_->notify();
+    if (!connected_ || pChar_ == nullptr) return;
+    if (button == MOUSE_BTN_LEFT) {
+        notify_line("CLICK\n");
+    } else if (button == MOUSE_BTN_RIGHT) {
+        notify_line("RIGHT\n");
+    } else if (button == MOUSE_BTN_MIDDLE) {
+        notify_line("MIDDLE\n");
+    }
 }
 
 void OmniBandBleServer::mouse_press(uint8_t button) {
-    if (!connected_ || pInputMouse_ == nullptr) return;
     button_mask_ |= button;
-    uint8_t report[4] = {button_mask_, 0, 0, 0};
-    pInputMouse_->setValue(report, 4);
-    pInputMouse_->notify();
+    if (button & MOUSE_BTN_LEFT) notify_line("DRAG_ON\n");
 }
 
 void OmniBandBleServer::mouse_release(uint8_t button) {
-    if (!connected_ || pInputMouse_ == nullptr) return;
     button_mask_ &= ~button;
-    uint8_t report[4] = {button_mask_, 0, 0, 0};
-    pInputMouse_->setValue(report, 4);
-    pInputMouse_->notify();
+    if (!(button_mask_ & MOUSE_BTN_LEFT)) notify_line("DRAG_OFF\n");
 }
 
 void OmniBandBleServer::mouse_toggle_drag() {
-    if (!connected_ || pInputMouse_ == nullptr) return;
     button_mask_ ^= MOUSE_BTN_LEFT;
-    uint8_t report[4] = {button_mask_, 0, 0, 0};
-    pInputMouse_->setValue(report, 4);
-    pInputMouse_->notify();
-    Serial.println(button_mask_ & MOUSE_BTN_LEFT ? 
-        "⚡ [BLE HID] DRAG LOCKED (Left Button HELD)" : 
-        "⚡ [BLE HID] DRAG RELEASED");
+    if (button_mask_ & MOUSE_BTN_LEFT) {
+        notify_line("DRAG_ON\n");
+        Serial.println("⚡ [BLE] DRAG LOCKED");
+    } else {
+        notify_line("DRAG_OFF\n");
+        Serial.println("⚡ [BLE] DRAG RELEASED");
+    }
 }
 
 void OmniBandBleServer::mouse_scroll(int8_t wheel) {
-    if (!connected_ || pInputMouse_ == nullptr) return;
-    uint8_t report[4] = {button_mask_, 0, 0, (uint8_t)wheel};
-    pInputMouse_->setValue(report, 4);
-    pInputMouse_->notify();
+    if (!connected_ || pChar_ == nullptr) return;
+    char buf[24];
+    snprintf(buf, sizeof(buf), "SCROLL,%d\n", wheel);
+    notify_line(buf);
 }
 
 // -----------------------------------------------------------------------------
-// TELEMETRY & COMMANDS
+// TELEMETRY & NOTIFICATIONS
 // -----------------------------------------------------------------------------
 void OmniBandBleServer::notify_frame(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, uint32_t seq, float dx, float dy) {
     if (!connected_ || pChar_ == nullptr) return;
@@ -199,11 +136,9 @@ void OmniBandBleServer::notify_frame(int32_t ch1, int32_t ch2, int32_t ch3, int3
 }
 
 void OmniBandBleServer::notify_click() {
-    mouse_click(MOUSE_BTN_LEFT);
-    if (connected_ && pChar_ != nullptr) {
-        pChar_->setValue((uint8_t*)"CLICK\n", 6);
-        pChar_->notify();
-    }
+    if (!connected_ || pChar_ == nullptr) return;
+    pChar_->setValue((uint8_t*)"CLICK\n", 6);
+    pChar_->notify();
 }
 
 void OmniBandBleServer::notify_line(const String& line) {

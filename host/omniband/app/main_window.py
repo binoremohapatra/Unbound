@@ -1198,6 +1198,22 @@ class MainWindow(QMainWindow):
         elif g in ("HOLD", "JAW_HOLD", "DRAG"):
             self._toggle_drag_lock()
             self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Drag Lock Toggled")
+        elif g == "DRAG_ON":
+            if not getattr(self, "_drag_latch", False):
+                self._toggle_drag_lock()
+            self.calib.append_log("⚡ [EDGE DSP] Drag Locked")
+        elif g == "DRAG_OFF":
+            if getattr(self, "_drag_latch", False):
+                self._toggle_drag_lock()
+            self.calib.append_log("⚡ [EDGE DSP] Drag Released")
+        elif g in ("MIDDLE", "MIDDLE_CLICK"):
+            self.gw.apply([OutputCommand(kind="button", name="middle", pressed=True)])
+            self.gw.flush(time.perf_counter())
+            QTimer.singleShot(80, lambda: (
+                self.gw.apply([OutputCommand(kind="button", name="middle", pressed=False)]),
+                self.gw.flush(time.perf_counter())
+            ))
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Middle Click")
         elif g in ("SCROLL", "BROW_RAISE", "SCROLL_UP"):
             self.gw.apply([OutputCommand(kind="wheel", delta_y=120)])
             self.gw.flush(time.perf_counter())

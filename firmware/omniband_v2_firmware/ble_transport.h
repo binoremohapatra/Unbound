@@ -14,7 +14,8 @@ class OmniBandBleServer : public BLEServerCallbacks, public BLECharacteristicCal
 public:
     void begin();
     bool is_connected() const { return connected_; }
-    void notify_frame(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, uint32_t seq);
+    void notify_frame(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, uint32_t seq, float dx = 0.0f, float dy = 0.0f);
+    void notify_click();
     void notify_line(const String& line);
 
     // Callbacks

@@ -20,6 +20,7 @@
 #include "omniband_core.h"
 #include "shared_state.h"
 #include "adc_front.h"
+#include "mpu_front.h"
 #include "config_store.h"
 #include "link.h"
 #include "oled_ui.h"
@@ -198,11 +199,15 @@ static void dsp_task(void*) {
             // 100 Hz BLE Notification (every 10 ms window = 5 samples @ 500 Hz)
             if (++ble_scnt >= 5) {
                 ble_scnt = 0;
+                float dx = 0.0f, dy = 0.0f;
+                g_mpu.read(dx, dy);
                 g_link.send_ble_somatic(
                     (int32_t)ble_env_peak[0],
                     (int32_t)ble_env_peak[1],
                     (int32_t)ble_env_peak[2],
-                    (int32_t)ble_env_peak[3]
+                    (int32_t)ble_env_peak[3],
+                    dx,
+                    dy
                 );
                 for (int i = 0; i < 4; ++i) ble_env_peak[i] = 0;
             }
@@ -253,6 +258,9 @@ void setup() {
     g_adc.begin();
     cal::begin();
     
+    Serial.println("[BOOT] Initializing MPU6050 Gyroscope...");
+    g_mpu.begin();
+
     Serial.println("[BOOT] Initializing OLED...");
     oled_begin();
 
@@ -274,11 +282,20 @@ void loop() {
         OutEvent e;
         while (xQueueReceive(g_evt_queue, &e, 0) == pdTRUE) {
             evt_overflow_ = false;
+            // On-Device Jaw Clench & Tap: Fire immediate click over BLE!
+            if (e.kind == omniband::OUT_EVT_DOWN && e.ch == 4) {
+                g_link.send_ble_click();
+            }
             if (e.kind == omniband::OUT_EVT_DOWN || e.kind == omniband::OUT_EVT_UP ||
                 e.kind == omniband::OUT_EVT_VETO) g_link.send_evt(e);
             else if (e.kind == omniband::OUT_GES) {
                 if (e.g == omniband::G_MODE_SET) g_link.send_mode_set(e.m);
-                else g_link.send_ges(e);
+                else {
+                    if (e.g == omniband::G_TAP || e.g == omniband::G_DOUBLE_TAP) {
+                        g_link.send_ble_click();
+                    }
+                    g_link.send_ges(e);
+                }
             }
         }
     }

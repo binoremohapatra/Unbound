@@ -73,11 +73,18 @@ String OmniBandBleServer::pop_rx() {
     return res;
 }
 
-void OmniBandBleServer::notify_frame(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, uint32_t seq) {
+void OmniBandBleServer::notify_frame(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4, uint32_t seq, float dx, float dy) {
     if (!connected_ || pChar_ == nullptr) return;
-    char buf[64];
-    snprintf(buf, sizeof(buf), "S,%ld,%ld,%ld,%ld,%lu\n", (long)ch1, (long)ch2, (long)ch3, (long)ch4, (unsigned long)seq);
+    char buf[96];
+    snprintf(buf, sizeof(buf), "S,%ld,%ld,%ld,%ld,%lu,%.2f,%.2f\n",
+             (long)ch1, (long)ch2, (long)ch3, (long)ch4, (unsigned long)seq, dx, dy);
     pChar_->setValue((uint8_t*)buf, strlen(buf));
+    pChar_->notify();
+}
+
+void OmniBandBleServer::notify_click() {
+    if (!connected_ || pChar_ == nullptr) return;
+    pChar_->setValue((uint8_t*)"CLICK\n", 6);
     pChar_->notify();
 }
 

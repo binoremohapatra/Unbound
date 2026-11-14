@@ -6,15 +6,16 @@
 namespace omniband {
 namespace hw {
 
-// Pin mapping (ESP32 DevKit 30-pin, ADC1 only)
+// Pin mapping (ESP32 DevKit 30-pin, matching your physical wiring)
 constexpr int PIN_CH1 = 32; // Left temple (ADC1_CH4)
-constexpr int PIN_CH2 = 33; // Centre-left forehead (ADC1_CH5)
-constexpr int PIN_CH3 = 34; // Centre-right forehead (ADC1_CH6 - input only)
-constexpr int PIN_CH4 = 35; // Right temple / molar clench (ADC1_CH7 - input only)
+constexpr int PIN_CH2 = 34; // Centre-left forehead (ADC1_CH6 - input only)
+constexpr int PIN_CH3 = 33; // Centre-right forehead (ADC1_CH5)
+constexpr int PIN_CH4 = 26; // Right temple / molar clench (ADC2_CH9 - Jaw Clench)
 
-// I2C OLED (SSD1306 128x64)
+// I2C MPU6050 & OLED (SSD1306 128x64)
 constexpr int PIN_I2C_SDA = 21;
 constexpr int PIN_I2C_SCL = 22;
+constexpr uint8_t MPU_I2C_ADDR = 0x68;
 constexpr uint8_t OLED_I2C_ADDR = 0x3C;
 constexpr uint32_t OLED_I2C_FREQ_HZ = 400000;
 

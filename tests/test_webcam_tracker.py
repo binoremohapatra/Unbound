@@ -255,3 +255,55 @@ def test_draw_deadzone_ring_and_hud():
     tracker._draw_hud(frame2, 640, 480, 0.5, 0.45, (384, 288),
                       False, 250.0, 180.0, face_found=True)
     assert np.count_nonzero(frame2) > 50
+
+
+def test_quad_blink_toggles_optical_fallback():
+    """Blinking 4 times within 1.6s must toggle head_mouse_enabled state and invoke callback."""
+    from collections import namedtuple
+    Point = namedtuple("Point", ["x", "y"])
+    toggled_states = []
+    tracker = RealWebcamTracker(
+        camera_id=999,
+        on_head_mouse_toggled=lambda en: toggled_states.append(en),
+    )
+    tracker.head_mouse_enabled = False
+
+    class MockResult:
+        def __init__(self, ear):
+            self.left_ear = ear
+            self.right_ear = ear
+            self.ear = ear
+            self.mar = 0.05
+            self.eye_dist = 0.12
+            self.nose_tip = Point(0.5, 0.45)
+            self.landmarks = [Point(0.5, 0.45)] * 468
+            self.tier = "TIER_1_BLENDSHAPES"
+
+    t = 100.0
+    # Simulate 4 distinct bilateral blinks
+    for i in range(4):
+        # Eyes close (blink starts)
+        t += 0.05
+        tracker._process_gestures(MockResult(ear=0.08), t)
+        # Eyes open (blink completes with duration ~0.15s)
+        t += 0.15
+        tracker._process_gestures(MockResult(ear=0.30), t)
+        # Inter-blink interval ~0.15s
+        t += 0.15
+
+    # 4 blinks completed -> head_mouse_enabled toggled to True!
+    assert tracker.head_mouse_enabled is True
+    assert toggled_states == [True]
+    assert "OPTICAL FALLBACK: ENABLED" in tracker._last_gesture_banner
+
+    # 4 more blinks -> head_mouse_enabled toggled back to False!
+    for i in range(4):
+        t += 0.05
+        tracker._process_gestures(MockResult(ear=0.08), t)
+        t += 0.15
+        tracker._process_gestures(MockResult(ear=0.30), t)
+        t += 0.15
+
+    assert tracker.head_mouse_enabled is False
+    assert toggled_states == [True, False]
+    assert "OPTICAL FALLBACK: DISABLED" in tracker._last_gesture_banner

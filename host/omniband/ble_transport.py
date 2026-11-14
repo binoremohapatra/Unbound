@@ -548,58 +548,71 @@ class OmniBandBleClient:
 
     def trigger_hybrid_connect(self) -> None:
         """
-        Hybrid 1-Click Connect:
+        Zero-Click / 1-Click Hybrid Connect:
         Step A: Auto-detect USB COM port. If openable and valid, connect immediately!
         Step B: Otherwise scan BLE for OmniBand / ESP32 with resilient WinRT retry.
         """
         if not self._running:
             self.start()
 
-        # Try USB Serial first in background
+        # Try USB Serial first in background thread, falling back to BLE if absent
         threading.Thread(target=self._attempt_hybrid_connect_step, daemon=True).start()
 
-    def _attempt_hybrid_connect_step(self) -> None:
-        self._update_status("Scanning USB COM ports & BLE...")
-        # Step A: Check for USB Serial port
+    def _sync_check_and_connect_usb(self) -> bool:
+        """Synchronously check for supported USB serial port and connect if present."""
+        if self.is_connected:
+            return True
+
         scanned_ports = scan_usb_serial_ports()
         if scanned_ports and SERIAL_AVAILABLE:
             best_port, desc, score = scanned_ports[0]
-            log.info("Attempting USB serial connection on %s (%s, score=%d)", best_port, desc, score)
-            self._update_status(f"Found USB port {best_port} ({desc}), connecting...")
+            if score >= 50:
+                log.info("Auto-connect detected USB Serial port: %s (%s, score=%d)", best_port, desc, score)
+                self._update_status(f"Found USB port {best_port} ({desc}), connecting...")
+                try:
+                    if self._serial_worker:
+                        self._serial_worker.stop()
 
-            try:
-                # Stop existing serial worker if any
-                if self._serial_worker:
-                    self._serial_worker.stop()
+                    self._serial_worker = SerialTransportWorker(
+                        port=best_port,
+                        baudrate=115200,
+                        on_payload=self._on_hardware_payload,
+                        on_status=self._on_serial_status_change,
+                    )
+                    self._serial_worker.start()
 
-                self._serial_worker = SerialTransportWorker(
-                    port=best_port,
-                    baudrate=115200,
-                    on_payload=self._on_hardware_payload,
-                    on_status=self._on_serial_status_change,
-                )
-                self._serial_worker.start()
+                    # Give it up to 1.2s to establish open stream
+                    t_end = time.perf_counter() + 1.2
+                    while time.perf_counter() < t_end:
+                        if self._serial_worker.is_connected:
+                            with self._lock:
+                                self._connected = True
+                                self._transport_type = "USB"
+                                self._device_name = f"USB Serial ({best_port})"
+                            msg = f"Connected: HARDWARE (USB {best_port})"
+                            self._update_status(f"🟢 {msg}")
+                            if self.on_connection_change:
+                                self.on_connection_change(True, msg)
+                            return True
+                        time.sleep(0.05)
+                except Exception as e:
+                    log.debug("USB connect attempt failed: %s", e)
 
-                # Give it up to 1.5s to establish open stream
-                t_end = time.perf_counter() + 1.5
-                while time.perf_counter() < t_end:
-                    if self._serial_worker.is_connected:
-                        with self._lock:
-                            self._connected = True
-                            self._transport_type = "USB"
-                            self._device_name = f"USB Serial ({best_port})"
-                        msg = f"Connected: HARDWARE (USB {best_port})"
-                        self._update_status(f"🟢 {msg}")
-                        if self.on_connection_change:
-                            self.on_connection_change(True, msg)
-                        return
-                    time.sleep(0.1)
+        return False
 
-            except Exception as e:
-                log.debug("USB connect attempt failed: %s, falling back to BLE", e)
+    async def _async_check_and_connect_usb(self) -> bool:
+        """Non-blocking check for USB serial port in thread executor."""
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, self._sync_check_and_connect_usb)
+
+    def _attempt_hybrid_connect_step(self) -> None:
+        self._update_status("Auto-scanning USB COM ports & BLE...")
+        # Step A: Check for USB Serial port
+        if self._sync_check_and_connect_usb():
+            return
 
         # Step B: Fallback to BLE scanner
-        self._update_status("USB not connected. Scanning BLE for OmniBand / ESP32...")
+        self._update_status("Scanning BLE for OmniBand / ESP32...")
         if self._loop and self._loop.is_running():
             asyncio.run_coroutine_threadsafe(self._do_ble_connect_cycle(), self._loop)
 
@@ -617,12 +630,15 @@ class OmniBandBleClient:
                 pass
 
     async def _worker_coroutine(self) -> None:
-        """Continuous background monitor."""
+        """Continuous background monitor with zero-click auto-connect."""
         while self._running:
             if not self.is_connected:
-                # If neither USB nor BLE is connected, run periodic BLE discovery
-                await self._do_ble_connect_cycle()
-            await asyncio.sleep(2.0)
+                # 1. Quick check for USB Serial (< 15ms if no COM port)
+                usb_connected = await self._async_check_and_connect_usb()
+                if not usb_connected and self._running and not self.is_connected:
+                    # 2. Resilient active BLE scan & connect
+                    await self._do_ble_connect_cycle()
+            await asyncio.sleep(1.5)
 
     async def _do_ble_connect_cycle(self) -> None:
         """Execute a resilient BLE scan and connection handshake with 3x retry."""
@@ -637,7 +653,11 @@ class OmniBandBleClient:
         async with self._connect_lock:
             try:
                 self._update_status("Scanning for OmniBand / ESP32 BLE...")
-                discovered = await BleakScanner.discover(timeout=5.0, return_adv=True)
+                scan_kwargs = {"timeout": 3.5, "return_adv": True}
+                if sys.platform == "win32":
+                    scan_kwargs["scanning_mode"] = "active"
+
+                discovered = await BleakScanner.discover(**scan_kwargs)
                 target_device = None
                 target_adv = None
 
@@ -656,6 +676,7 @@ class OmniBandBleClient:
                         break
 
                 if not target_device:
+                    self._update_status("OmniBand BLE not found. Auto-retrying...")
                     return
 
                 rssi = getattr(target_adv, "rssi", None) or getattr(target_device, "rssi", -60) or -60

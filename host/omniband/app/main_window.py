@@ -66,6 +66,7 @@ class MainWindow(QMainWindow):
     sig_imu_motion = Signal(float, float)
     sig_hw_status = Signal(str)
     sig_hw_gesture = Signal(str)
+    sig_head_mouse_toggled = Signal(bool)
     sig_text_focus = Signal(bool)
     sig_prune_telemetry = Signal(dict)
     sig_prune_output = Signal(str, bool)
@@ -83,12 +84,14 @@ class MainWindow(QMainWindow):
 
         self.sig_biometric_click.connect(self._on_biometric_click)
         self.sig_drag_toggle.connect(self._toggle_drag_lock)
+        self.sig_head_mouse_toggled.connect(self._on_head_mouse_toggled)
         self.sig_text_focus.connect(self._on_text_focus_auto_popup)
 
-        # Child windows & agents
+        # Child windows & agents (kept hidden by default to avoid empty secondary windows)
         self.hud = HudOverlay()
+        self.hud.hide()
         self.reticle = SomaticCursorReticle()
-        self.reticle.show()
+        self.reticle.hide()
 
         self.floating_kb = FloatingKeyboardWindow(
             on_type_fn=self._inject_keyboard_char,
@@ -154,13 +157,14 @@ class MainWindow(QMainWindow):
         self._lbl_tier.setFont(QFont("Cascadia Code", 10, QFont.Bold))
         self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
-        self._btn_scan_ble = QPushButton("🔵 Connect Hardware (BLE / USB)")
-        self._btn_scan_ble.setToolTip("Auto-detects USB COM port first, then scans BLE for OmniBand / ESP32")
+        self._btn_scan_ble = QPushButton("🔄 Auto-Connecting (Wi-Fi/USB)...")
+        self._btn_scan_ble.setToolTip("Zero-config Wi-Fi UDP (Port 4210) & USB auto-connect. Connect to OmniBand_WiFi (12345678) or plug USB.")
+        self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; padding: 4px 10px; border-radius: 4px; border: 1px solid {BURNT_ORANGE};")
         self._btn_scan_ble.clicked.connect(self._on_scan_ble_clicked)
 
-        self._lbl_ble_metrics = QLabel("Hardware: Disconnected")
-        self._lbl_ble_metrics.setFont(QFont("Cascadia Code", 9))
-        self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+        self._lbl_ble_metrics = QLabel("Hardware: Auto-Connecting...")
+        self._lbl_ble_metrics.setFont(QFont("Cascadia Code", 9, QFont.Bold))
+        self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
 
         self._btn_microsoft_kb = QPushButton("⌨️ MICROSOFT KEYBOARD")
         self._btn_microsoft_kb.setStyleSheet(f"background: {BURNT_ORANGE}; color: #111; font-weight: bold; padding: 4px 10px; border-radius: 4px;")
@@ -170,13 +174,13 @@ class MainWindow(QMainWindow):
         btn_toggle_hud.clicked.connect(self._toggle_hud)
 
         self._chk_reticle = QCheckBox("🎯 Tactical Reticle")
-        self._chk_reticle.setChecked(True)
+        self._chk_reticle.setChecked(False)
         self._chk_reticle.toggled.connect(lambda c: self.reticle.setVisible(c))
 
-        self._btn_head_mouse = QPushButton("🖱️ HEAD-MOUSE: ON [F11]")
+        self._btn_head_mouse = QPushButton("🖱️ HEAD-MOUSE: OFF [F11 / 4x Blink]")
         self._btn_head_mouse.setCheckable(True)
-        self._btn_head_mouse.setChecked(True)
-        self._btn_head_mouse.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
+        self._btn_head_mouse.setChecked(False)
+        self._btn_head_mouse.setStyleSheet(f"background-color: {SURFACE_2}; color: {WARM_GRAPHITE}; font-weight: bold;")
         self._btn_head_mouse.clicked.connect(self._toggle_head_mouse)
 
         self._chk_lock_mode = QPushButton("🔓 Auto-Mode")
@@ -255,9 +259,9 @@ class MainWindow(QMainWindow):
         self._btn_calib_optical.setStyleSheet(f"background-color: #00E5FF; color: #111; font-weight: bold;")
         self._btn_calib_optical.clicked.connect(lambda: (self.tabs.setCurrentIndex(5), self.calib.start_optical_calibration()))
 
-        self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse (120Hz Decoupled)")
-        self._chk_head_mouse.setChecked(True)
-        self._chk_head_mouse.toggled.connect(lambda chk: setattr(self.webcam_tracker, "head_mouse_enabled", chk))
+        self._chk_head_mouse = QCheckBox("Enable Webcam Head-Mouse (120Hz Decoupled) [4x Blink Toggle]")
+        self._chk_head_mouse.setChecked(False)
+        self._chk_head_mouse.toggled.connect(self._on_head_mouse_checkbox_toggled)
 
         # Pointer Speed Slider (0.2x to 2.5x)
         lbl_speed_title = QLabel("Pointer Speed:")
@@ -372,8 +376,11 @@ class MainWindow(QMainWindow):
             on_zoom_clutch=self._on_zoom_clutch_event,
             on_latch_changed=self._on_latch_state_changed,
             on_universal_exit=self._on_universal_exit,
+            on_head_mouse_toggled=lambda en: self.sig_head_mouse_toggled.emit(en),
             optical_calibrator=self.optical_calibrator,
         )
+        # Default head-mouse OFF at startup so optical fallback only enables on 4x Blink or F11!
+        self.webcam_tracker.head_mouse_enabled = False
         self.webcam_tracker.start()
 
         # 60 FPS Consistent Cursor Integration Timer (16 ms tick)
@@ -429,7 +436,7 @@ class MainWindow(QMainWindow):
         self.sig_hw_status.connect(self._on_hw_status_event)
         self.sig_hw_gesture.connect(self._on_hardware_gesture_event)
 
-        # Unified Hardware Transport Manager for OmniBand Headband
+        # Unified Hardware Transport Manager for OmniBand Headband (USB / BLE)
         self.ble_client = OmniBandBleClient(
             calibrator=self.calibrator,
             on_somatic_frame=lambda ch, act, seq: self.sig_ble_frame.emit(ch, act, seq),
@@ -440,6 +447,21 @@ class MainWindow(QMainWindow):
             on_status_change=lambda msg: self.sig_hw_status.emit(msg),
         )
         self.ble_client.start()
+        # Zero-Click Auto-Connect: kick off immediate hardware search on app startup
+        QTimer.singleShot(250, self.ble_client.trigger_hybrid_connect)
+
+        # Zero-Config Ultra-Low-Latency Wi-Fi UDP Hardware Receiver (Port 4210)
+        from host.omniband.wifi_transport import OmniBandWifiClient
+        self.wifi_client = OmniBandWifiClient(
+            calibrator=self.calibrator,
+            on_somatic_frame=lambda ch, act, seq: self.sig_ble_frame.emit(ch, act, seq),
+            on_connection_change=self._on_wifi_connection_event,
+            on_metrics_update=lambda rate: self.sig_ble_metrics.emit(-40, rate),
+            on_imu_motion=lambda dx, dy: self.sig_imu_motion.emit(dx, dy),
+            on_hardware_gesture=lambda g: self.sig_hw_gesture.emit(g),
+            on_status_change=lambda msg: self.sig_hw_status.emit(msg),
+        )
+        self.wifi_client.start()
 
     def _on_webcam_frame(self, frame_rgb) -> None:
         try:
@@ -850,15 +872,36 @@ class MainWindow(QMainWindow):
     def _toggle_head_mouse(self) -> None:
         new_state = not self.webcam_tracker.head_mouse_enabled
         self.webcam_tracker.head_mouse_enabled = new_state
-        self._btn_head_mouse.setChecked(new_state)
-        # Flush and release all keys immediately on head-mouse toggle to prevent stuck keys
+        self._on_head_mouse_toggled(new_state)
+
+    def _on_head_mouse_checkbox_toggled(self, checked: bool) -> None:
+        if self.webcam_tracker.head_mouse_enabled != checked:
+            self.webcam_tracker.head_mouse_enabled = checked
+            self._on_head_mouse_toggled(checked)
+
+    def _on_head_mouse_toggled(self, enabled: bool) -> None:
+        """Handle 4x Quad-Blink gesture or F11 toggle for Optical Fallback Head-Mouse."""
+        self._btn_head_mouse.blockSignals(True)
+        self._btn_head_mouse.setChecked(enabled)
+        self._btn_head_mouse.blockSignals(False)
+
+        if hasattr(self, "_chk_head_mouse"):
+            self._chk_head_mouse.blockSignals(True)
+            self._chk_head_mouse.setChecked(enabled)
+            self._chk_head_mouse.blockSignals(False)
+
         self.gw.release_all("head mouse mode toggle")
-        if new_state:
+        if enabled:
+            self._btn_head_mouse.setText("🖱️ HEAD-MOUSE: ON [F11 / 4x Blink]")
             self._btn_head_mouse.setStyleSheet(f"background-color: {STATUS_OK}; color: #111; font-weight: bold;")
-            self.status.showMessage("🖱️ HEAD-MOUSE ACTIVE: Moving head moves cursor | A/D scancodes blocked", 3000)
+            self.status.showMessage("👁️x4 Quad-Blink: Optical Fallback Head-Mouse ENABLED", 3500)
+            self.calib.append_log("GESTURE: 👁️x4 Quad-Blink -> Optical Fallback Head-Mouse ENABLED")
         else:
-            self._btn_head_mouse.setStyleSheet("")
-            self.status.showMessage("HEAD-MOUSE PAUSED", 2000)
+            self._btn_head_mouse.setText("🖱️ HEAD-MOUSE: OFF [F11 / 4x Blink]")
+            self._btn_head_mouse.setStyleSheet(f"background-color: {SURFACE_2}; color: {WARM_GRAPHITE}; font-weight: bold;")
+            self.status.showMessage("👁️x4 Quad-Blink: Optical Fallback Head-Mouse DISABLED", 3500)
+            self.calib.append_log("GESTURE: 👁️x4 Quad-Blink -> Optical Fallback Head-Mouse DISABLED")
+        self._update_tier_badge()
 
     def _toggle_drag_lock(self) -> None:
         """Toggle Left Mouse Button drag latch."""
@@ -1169,14 +1212,60 @@ class MainWindow(QMainWindow):
             bar_vals=[0.2, 0.4, 0.3, 0.5]
         )
 
+    def _on_wifi_connection_event(self, connected: bool, message: str) -> None:
+        if connected:
+            self._lbl_ble_metrics.setText("🟢 Wi-Fi UDP: Connected")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self._btn_scan_ble.setText("🟢 HARDWARE (Wi-Fi UDP)")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {STATUS_OK}; font-weight: bold; border: 1px solid {STATUS_OK}; padding: 4px 10px; border-radius: 4px;")
+            self.status.showMessage("🟢 CONNECTED: HARDWARE (Wi-Fi UDP)", 4000)
+            self.calib.append_log(f"HARDWARE CONNECTED: {message}")
+            self._update_tier_badge()
+        else:
+            if not self.ble_client.is_connected:
+                self._btn_scan_ble.setText("🔄 Auto-Connecting (Wi-Fi/USB)...")
+                self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+                self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
+                self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+                self.status.showMessage(f"Wi-Fi UDP stream paused ({message}). Auto-connecting in background...", 3000)
+                self.calib.append_log(f"HARDWARE DISCONNECTED: {message}")
+                self.gw.release_all("Hardware disconnect failsafe")
+                self._update_tier_badge()
+
     def _on_scan_ble_clicked(self) -> None:
-        self.calib.append_log("Operator triggered Hybrid Hardware Connect (BLE / USB).")
-        self.status.showMessage("Scanning USB COM ports & BLE...", 3000)
+        wifi_connected = hasattr(self, "wifi_client") and self.wifi_client.is_connected
+        if wifi_connected or self.ble_client.is_connected:
+            self.calib.append_log("Operator requested disconnect & re-scan.")
+            if hasattr(self, "wifi_client"):
+                self.wifi_client.trigger_ping()
+            self.ble_client.stop()
+            self.ble_client.start()
+            self._btn_scan_ble.setText("🔄 Auto-Connecting (Wi-Fi/USB)...")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+            self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self.status.showMessage("Disconnected. Auto-reconnecting in background...", 3000)
+            return
+
+        self._btn_scan_ble.setText("🔄 Scanning Hardware...")
+        self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+        self._lbl_ble_metrics.setText("Hardware: Scanning...")
+        self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+        self.calib.append_log("Operator triggered Hardware Re-scan (Wi-Fi UDP / USB).")
+        self.status.showMessage("Listening on Wi-Fi UDP Port 4210 & scanning USB...", 3000)
+        if hasattr(self, "wifi_client"):
+            self.wifi_client.trigger_ping()
         self.ble_client.trigger_hybrid_connect()
 
     def _on_hw_status_event(self, status_msg: str) -> None:
         self.status.showMessage(status_msg, 3000)
         self.calib.append_log(f"HW: {status_msg}")
+        if not self.ble_client.is_connected:
+            s_lower = status_msg.lower()
+            if "found" in s_lower or "connecting" in s_lower:
+                self._lbl_ble_metrics.setText("Hardware: Connecting...")
+            elif "scanning" in s_lower:
+                self._lbl_ble_metrics.setText("Hardware: Auto-Scanning...")
 
     def _on_hardware_gesture_event(self, gesture: str) -> None:
         """Route on-device Edge DSP detected gestures directly to OS actions."""
@@ -1245,30 +1334,37 @@ class MainWindow(QMainWindow):
             self._update_tier_badge()
 
     def _on_ble_connection_event(self, connected: bool, message: str) -> None:
+        if hasattr(self, "wifi_client") and self.wifi_client.is_connected:
+            return  # Wi-Fi UDP stream is active primary
+
         transport = getattr(self.ble_client, "transport_type", "BLE")
         if connected:
-            if transport == "USB":
-                self._lbl_ble_metrics.setText("🟢 USB: Connected")
-                self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-                self.status.showMessage(f"🟢 {message}", 4000)
-                self.calib.append_log(f"HARDWARE CONNECTED: {message}")
-            else:
-                self._lbl_ble_metrics.setText("🟢 BLE: Connected")
-                self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-                self.status.showMessage(f"🔵 {message}", 4000)
-                self.calib.append_log(f"HARDWARE CONNECTED: {message}")
+            self._btn_scan_ble.setText(f"🟢 Hardware: Connected ({transport})")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {STATUS_OK}; font-weight: bold; border: 1px solid {STATUS_OK}; padding: 4px 10px; border-radius: 4px;")
+            self._lbl_ble_metrics.setText(f"🟢 {transport}: Connected")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            prefix = "🟢" if transport == "USB" else "🔵"
+            self.status.showMessage(f"{prefix} {message}", 4000)
+            self.calib.append_log(f"HARDWARE CONNECTED: {message}")
             self._update_tier_badge()
         else:
-            self._lbl_ble_metrics.setText("Hardware: Disconnected")
-            self._lbl_ble_metrics.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
-            self.status.showMessage(f"Hardware Disconnected ({message}).", 3000)
-            self.calib.append_log(f"HARDWARE DISCONNECTED: {message}")
+            self._btn_scan_ble.setText("🔄 Auto-Connecting (Wi-Fi/USB)...")
+            self._btn_scan_ble.setStyleSheet(f"background-color: {SURFACE_1}; color: {BURNT_ORANGE}; font-weight: bold; border: 1px solid {BURNT_ORANGE}; padding: 4px 10px; border-radius: 4px;")
+            self._lbl_ble_metrics.setText("Hardware: Auto-Connecting...")
+            self._lbl_ble_metrics.setStyleSheet(f"color: {BURNT_ORANGE}; padding: 4px 6px; border-radius: 4px; background: {SURFACE_1};")
+            self.status.showMessage(f"Hardware Disconnected ({message}). Auto-connecting in background...", 3000)
+            self.calib.append_log(f"HARDWARE DISCONNECTED: {message} -> Auto-reconnecting in background")
             # Safe handoff: release all inputs within < 150ms grace
             self.gw.release_all("Hardware disconnect failsafe")
             self._update_tier_badge()
         self.calib.set_ble_metrics(connected, message, self.ble_client.rssi, self.ble_client.packet_rate)
 
     def _on_ble_metrics_event(self, rssi: int, rate: float) -> None:
+        if hasattr(self, "wifi_client") and self.wifi_client.is_connected:
+            self._lbl_ble_metrics.setText(f"Wi-Fi UDP: {rate:.1f} pkt/s | Port 4210")
+            self.calib.set_ble_metrics(True, "OmniBand-Wi-Fi-UDP", rssi, rate)
+            return
+
         transport = getattr(self.ble_client, "transport_type", "BLE")
         if transport == "USB":
             self._lbl_ble_metrics.setText(f"USB: {rate:.1f} pkt/s")

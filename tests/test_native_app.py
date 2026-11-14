@@ -206,6 +206,7 @@ def test_main_window_camera_controls_and_120hz_loop(qapp, monkeypatch):
         assert win._subpixel_y == 0.0
 
     # Outside deadzone: Ballistic relative integration
+    win.webcam_tracker.head_mouse_enabled = True
     win.webcam_tracker._vx = 200.0
     win.webcam_tracker._vy = 100.0
     win.webcam_tracker._in_deadzone = False
@@ -214,7 +215,6 @@ def test_main_window_camera_controls_and_120hz_loop(qapp, monkeypatch):
     assert win._subpixel_x > 0.0 or win._subpixel_y > 0.0
 
     # Verify Rule #2: Head movements in Head-Mouse mode NEVER emit 'A' or 'D' keys!
-    win.webcam_tracker.head_mouse_enabled = True
     win.gw.release_all("test")
     assert "a" not in win.gw.held
     assert "d" not in win.gw.held

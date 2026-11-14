@@ -602,7 +602,15 @@ class OmniBandBleClient:
     def _run_async_loop(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self._worker_coroutine())
+        try:
+            self._loop.run_until_complete(self._worker_coroutine())
+        except (asyncio.CancelledError, RuntimeError):
+            pass
+        finally:
+            try:
+                self._loop.close()
+            except Exception:
+                pass
 
     async def _worker_coroutine(self) -> None:
         """Continuous background monitor."""
@@ -619,25 +627,29 @@ class OmniBandBleClient:
 
         try:
             self._update_status("Scanning for OmniBand / ESP32 BLE...")
-            devices = await BleakScanner.discover(timeout=3.0)
+            discovered = await BleakScanner.discover(timeout=5.0, return_adv=True)
             target_device = None
+            target_adv = None
 
-            # Broad matching: name keywords OR advertised service UUID
-            for d in devices:
-                name_str = (d.name or "").lower()
+            # Broad matching: service UUID OR name keywords in local_name / d.name
+            for d, adv in discovered.values():
+                name_str = (getattr(adv, "local_name", None) or d.name or "").lower()
+                adv_uuids = [str(u).lower() for u in (getattr(adv, "service_uuids", None) or [])]
+
+                if SERVICE_UUID.lower() in adv_uuids:
+                    target_device = d
+                    target_adv = adv
+                    break
                 if any(kw in name_str for kw in KNOWN_DEVICE_KEYWORDS):
                     target_device = d
+                    target_adv = adv
                     break
-                if d.metadata and "uuids" in d.metadata:
-                    if any(SERVICE_UUID.lower() == u.lower() for u in d.metadata["uuids"]):
-                        target_device = d
-                        break
 
             if not target_device:
                 return
 
-            rssi = getattr(target_device, "rssi", -60) or -60
-            name = target_device.name or OMNIBAND_BLE_NAME
+            rssi = getattr(target_adv, "rssi", None) or getattr(target_device, "rssi", -60) or -60
+            name = (getattr(target_adv, "local_name", None) if target_adv else None) or target_device.name or OMNIBAND_BLE_NAME
             self._update_status(f"Found {name} ({rssi} dBm), connecting GATT...")
 
             # 3x Fast Retry for Windows WinRT backend
@@ -645,11 +657,14 @@ class OmniBandBleClient:
             for attempt in range(1, 4):
                 try:
                     log.info("Connecting to BLEDevice %s (%s), attempt %d/3...", name, target_device.address, attempt)
-                    async with BleakClient(
-                        target_device,
-                        timeout=12.0,
-                        disconnected_callback=self._on_ble_disconnect,
-                    ) as client:
+                    kwargs = {
+                        "timeout": 12.0,
+                        "disconnected_callback": self._on_ble_disconnect,
+                    }
+                    if sys.platform == "win32":
+                        kwargs["winrt"] = {"use_cached_services": False}
+
+                    async with BleakClient(target_device, **kwargs) as client:
                         self._client = client
                         if client.is_connected:
                             connected = True

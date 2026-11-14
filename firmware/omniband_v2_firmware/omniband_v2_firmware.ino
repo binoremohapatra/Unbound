@@ -201,6 +201,9 @@ static void dsp_task(void*) {
                 ble_scnt = 0;
                 float dx = 0.0f, dy = 0.0f;
                 g_mpu.read(dx, dy);
+                if (g_ble.is_connected() && (abs(dx) > 0.01f || abs(dy) > 0.01f)) {
+                    g_ble.mouse_move((int8_t)dx, (int8_t)dy, 0);
+                }
                 g_link.send_ble_somatic(
                     (int32_t)ble_env_peak[0],
                     (int32_t)ble_env_peak[1],
@@ -282,21 +285,42 @@ void loop() {
         OutEvent e;
         while (xQueueReceive(g_evt_queue, &e, 0) == pdTRUE) {
             evt_overflow_ = false;
-            // On-Device Jaw Clench & Tap: Fire immediate click over BLE!
-            if (e.kind == omniband::OUT_EVT_DOWN && e.ch == 4) {
-                g_link.send_ble_click();
+
+            // ==============================================================
+            // NATIVE HARDWARE ACTIONS (Sent directly to Windows Kernel!)
+            // ==============================================================
+            if (e.kind == omniband::OUT_EVT_DOWN) {
+                if (e.ch == 4) {
+                    // CH4 Press -> Mouse Left Click
+                    g_ble.mouse_click(MOUSE_BTN_LEFT);
+                } else if (e.ch == 2 || e.ch == 3) {
+                    // Eyebrow Raise (CH2/CH3) -> Mouse Scroll UP
+                    g_ble.mouse_scroll(3);
+                } else if (e.ch == 1) {
+                    // Left Temple Clench -> Middle Click
+                    g_ble.mouse_click(MOUSE_BTN_MIDDLE);
+                }
+            } else if (e.kind == omniband::OUT_GES) {
+                if (e.g == omniband::G_SINGLE) {
+                    // Single Clench -> Left Click
+                    g_ble.mouse_click(MOUSE_BTN_LEFT);
+                } else if (e.g == omniband::G_DOUBLE) {
+                    // Double Clench / Fast Tap -> Right Click
+                    g_ble.mouse_click(MOUSE_BTN_RIGHT);
+                } else if (e.g == omniband::G_LONG) {
+                    // Long Hold Clench -> Drag Lock Toggle
+                    g_ble.mouse_toggle_drag();
+                } else if (e.g == omniband::G_TRIPLE) {
+                    // Triple Clench -> Middle Click
+                    g_ble.mouse_click(MOUSE_BTN_MIDDLE);
+                }
+
+                if (e.g == omniband::G_MODE_SET) g_link.send_mode_set(e.m);
+                else g_link.send_ges(e);
             }
+
             if (e.kind == omniband::OUT_EVT_DOWN || e.kind == omniband::OUT_EVT_UP ||
                 e.kind == omniband::OUT_EVT_VETO) g_link.send_evt(e);
-            else if (e.kind == omniband::OUT_GES) {
-                if (e.g == omniband::G_MODE_SET) g_link.send_mode_set(e.m);
-                else {
-                    if (e.g == omniband::G_TAP || e.g == omniband::G_DOUBLE_TAP) {
-                        g_link.send_ble_click();
-                    }
-                    g_link.send_ges(e);
-                }
-            }
         }
     }
     oled_update();

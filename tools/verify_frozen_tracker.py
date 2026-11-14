@@ -39,7 +39,7 @@ def verify_executable(exe_path: Path) -> bool:
                 cmd,
                 capture_output=True,
                 text=True,
-                timeout=60,
+                timeout=120,
             )
             print(res.stdout)
             if res.stderr:

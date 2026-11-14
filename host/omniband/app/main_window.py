@@ -538,6 +538,11 @@ class MainWindow(QMainWindow):
         if hasattr(self, "webcam_tracker") and self.webcam_tracker.active_latch != "IDLE":
             return
 
+        # Tier 2 Hybrid Rule: If OmniBand hardware (BLE / USB) is connected,
+        # suppress optical jaw/blink clicks so physical CH4 piezo has sole click authority!
+        if getattr(self, "ble_client", None) and self.ble_client.is_connected:
+            return
+
         if hasattr(self, "reticle"):
             self.reticle.trigger_click_flash()
         if hasattr(self, "focus_watcher") and self.focus_watcher:
@@ -915,6 +920,10 @@ class MainWindow(QMainWindow):
     def _on_optical_gesture(self, ch: int, down: bool, amp: float) -> None:
         """Inject real OS keys only when in an actual game window and NOT in head-mouse mode."""
         if not self.armed:
+            return
+
+        # Suppress optical gestures when physical OmniBand headband is connected
+        if getattr(self, "ble_client", None) and self.ble_client.is_connected:
             return
         now_str = time.strftime("%H:%M:%S")
 

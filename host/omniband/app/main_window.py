@@ -1180,21 +1180,44 @@ class MainWindow(QMainWindow):
     def _on_hardware_gesture_event(self, gesture: str) -> None:
         """Route on-device Edge DSP detected gestures directly to OS actions."""
         g = gesture.strip().upper()
-        if g in ("CLICK", "LEFT", "JAW_CLENCH", "CH4"):
+        from core.events import OutputCommand
+        from PySide6.QtCore import QTimer
+
+        if g in ("CLICK", "LEFT", "JAW_CLENCH", "RIGHT_CLENCH", "CH4"):
             self._on_physical_edge(4, True, 200.0)
-            from PySide6.QtCore import QTimer
             QTimer.singleShot(80, lambda: self._on_physical_edge(4, False, 0.0))
-            self.calib.append_log(f"⚡ [EDGE DSP] Hardware Gesture: {g} -> Left Click")
-        elif g in ("RIGHT", "JAW_TAP"):
-            from core.events import OutputCommand
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Left Click")
+        elif g in ("RIGHT", "JAW_TAP", "DOUBLE_CLENCH", "TAP"):
             self.gw.apply([OutputCommand(kind="button", name="right", pressed=True)])
             self.gw.flush(time.perf_counter())
-            from PySide6.QtCore import QTimer
             QTimer.singleShot(80, lambda: (
                 self.gw.apply([OutputCommand(kind="button", name="right", pressed=False)]),
                 self.gw.flush(time.perf_counter())
             ))
-            self.calib.append_log(f"⚡ [EDGE DSP] Hardware Gesture: {g} -> Right Click")
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Right Click")
+        elif g in ("HOLD", "JAW_HOLD", "DRAG"):
+            self._toggle_drag_lock()
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Drag Lock Toggled")
+        elif g in ("SCROLL", "BROW_RAISE", "SCROLL_UP"):
+            self.gw.apply([OutputCommand(kind="wheel", delta_y=120)])
+            self.gw.flush(time.perf_counter())
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Scroll Up")
+        elif g in ("NOD", "SCROLL_DOWN"):
+            self.gw.apply([OutputCommand(kind="wheel", delta_y=-120)])
+            self.gw.flush(time.perf_counter())
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Scroll Down")
+        elif g in ("LEFT_EYE", "EYE_CLOSE", "ESC"):
+            self.gw.apply([OutputCommand(kind="key", name="esc", pressed=True)])
+            self.gw.flush(time.perf_counter())
+            QTimer.singleShot(60, lambda: (
+                self.gw.apply([OutputCommand(kind="key", name="esc", pressed=False)]),
+                self.gw.flush(time.perf_counter())
+            ))
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Escape Key")
+        elif g in ("LEFT_CLENCH", "CH1"):
+            self._on_physical_edge(1, True, 200.0)
+            QTimer.singleShot(80, lambda: self._on_physical_edge(1, False, 0.0))
+            self.calib.append_log(f"⚡ [EDGE DSP] Gesture: {g} -> Key 'a'")
 
     def _on_imu_motion_event(self, dx: float, dy: float) -> None:
         """Route hardware IMU relative motion directly into Windows cursor."""

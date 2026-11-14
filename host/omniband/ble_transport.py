@@ -230,9 +230,17 @@ def parse_hardware_payload(data: bytes | str) -> Optional[dict]:
         except Exception:
             return None
 
-    # Format 4: Plain text triggers
-    upper_s = s.upper()
-    valid_triggers = {"CLICK", "LEFT", "RIGHT", "SCROLL", "CH1", "CH2", "CH3", "CH4"}
+    # Format 4: Plain text / G-code triggers
+    upper_s = s.upper().strip()
+    if upper_s.startswith("G,") or upper_s.startswith("GESTURE,"):
+        parts = upper_s.split(",")
+        upper_s = parts[1].strip()
+
+    valid_triggers = {
+        "CLICK", "LEFT", "RIGHT", "SCROLL", "CH1", "CH2", "CH3", "CH4",
+        "JAW_TAP", "JAW_HOLD", "DOUBLE_CLENCH", "RIGHT_CLENCH", "LEFT_CLENCH",
+        "BROW_RAISE", "NOD", "HOLD", "LEFT_EYE", "SMILE", "CHEEK_PUFF"
+    }
     if upper_s in valid_triggers:
         return {
             "kind": "gesture",

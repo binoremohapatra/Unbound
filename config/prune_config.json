@@ -1,0 +1,5 @@
+{
+  "prune_base_url": "https://api.pruneai.dev/v1",
+  "prune_api_key": "",
+  "model": "gpt-4o-mini"
+}

@@ -18,6 +18,7 @@ hiddenimports = [
     'PySide6.QtGui',
     'PySide6.QtWidgets',
     'host.omniband.app.theme',
+    'host.omniband.prune_shield',
     'host.omniband.app.oscilloscope',
     'host.omniband.app.arena_widget',
     'host.omniband.app.icu_view',

@@ -54,6 +54,10 @@ class SomaticKeyboardWidget(QWidget):
         ]
         self.curr_row = 1
         self.curr_col = 0
+        self.live_text: str = ""
+        self.buttons = [
+            [QPushButton("the"), QPushButton("to"), QPushButton("and")]
+        ]
 
         self._build_ui()
 
@@ -119,10 +123,12 @@ class SomaticKeyboardWidget(QWidget):
             hide_windows_touch_keyboard()
             return
         elif key == "SPACE":
+            self.live_text += " "
             if self.on_type_fn:
                 self.on_type_fn(" ")
             self.sig_key_typed.emit(" ")
         elif key == "BACKSPACE":
+            self.live_text = self.live_text[:-1]
             if self.on_type_fn:
                 self.on_type_fn("backspace")
             self.sig_key_typed.emit("backspace")
@@ -130,7 +136,22 @@ class SomaticKeyboardWidget(QWidget):
             if self.on_type_fn:
                 self.on_type_fn("\n")
             self.sig_key_typed.emit("\n")
-        else:
+        elif key.startswith("[PRED_"):
+            pred_idx = 0
+            if key == "[PRED_2]":
+                pred_idx = 1
+            elif key == "[PRED_3]":
+                pred_idx = 2
+            chosen = self.buttons[0][pred_idx].text()
+            self.live_text = chosen + " "
             if self.on_type_fn:
-                self.on_type_fn(key)
-            self.sig_key_typed.emit(key)
+                self.on_type_fn(chosen + " ")
+            self.sig_key_typed.emit(chosen + " ")
+        else:
+            char = key.lower() if len(key) == 1 else key
+            self.live_text += char
+            if "unb" in self.live_text:
+                self.buttons[0][0].setText("unbound")
+            if self.on_type_fn:
+                self.on_type_fn(char)
+            self.sig_key_typed.emit(char)

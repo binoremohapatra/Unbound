@@ -469,6 +469,14 @@ class MainWindow(QMainWindow):
         """Consistent 60 FPS delta-velocity cursor integration loop."""
         if not self.webcam_tracker.head_mouse_enabled:
             return
+
+        # MPU Hardware Priority Invariant:
+        # If hardware MPU is detected and actively sending motion (within 1.0s),
+        # mute optical head-mouse so hardware MPU has sole cursor authority!
+        now = time.perf_counter()
+        if hasattr(self, "ble_client") and self.ble_client.is_connected:
+            if now - getattr(self, "_last_mpu_motion_time", 0.0) < 1.0:
+                return  # MPU is healthy & driving cursor — suppress optical head-mouse!
         now = time.perf_counter()
         if now < self.webcam_tracker.freeze_until:
             return
@@ -1168,8 +1176,11 @@ class MainWindow(QMainWindow):
 
     def _on_imu_motion_event(self, dx: float, dy: float) -> None:
         """Route hardware IMU relative motion directly into Windows cursor."""
-        if dx != 0.0 or dy != 0.0:
+        if abs(dx) > 0.01 or abs(dy) > 0.01:
+            self._last_mpu_motion_time = time.perf_counter()
+            self._mpu_detected = True
             self.gw.move_cursor_relative(dx, dy)
+            self._update_tier_badge()
 
     def _on_ble_connection_event(self, connected: bool, message: str) -> None:
         transport = getattr(self.ble_client, "transport_type", "BLE")
@@ -1222,19 +1233,24 @@ class MainWindow(QMainWindow):
     def _update_tier_badge(self) -> None:
         hw_on = self.ble_client.is_connected
         transport = getattr(self.ble_client, "transport_type", "BLE")
+        now = time.perf_counter()
+        mpu_active = hw_on and (now - getattr(self, "_last_mpu_motion_time", 0.0) < 1.0)
         opt_on = self.webcam_tracker.head_mouse_enabled and self.webcam_tracker.is_alive()
 
-        if hw_on and opt_on:
-            self._lbl_tier.setText(f"ACTIVE: TIER 2 ({transport} + OPTICAL HYBRID)")
-            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+        if hw_on and mpu_active:
+            self._lbl_tier.setText(f"ACTIVE: TIER 1 ({transport} MPU CURSOR + SOMATIC)")
+            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+        elif hw_on and opt_on:
+            self._lbl_tier.setText(f"ACTIVE: TIER 2 ({transport} SOMATIC + OPTICAL FALLBACK CURSOR)")
+            self._lbl_tier.setStyleSheet(f"color: #00E5FF; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         elif hw_on:
-            self._lbl_tier.setText(f"ACTIVE: TIER 1 ({transport})")
+            self._lbl_tier.setText(f"ACTIVE: TIER 1 ({transport} SOMATIC ONLY)")
             self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         elif opt_on:
-            self._lbl_tier.setText("ACTIVE: TIER 3 (OPTICAL)")
-            self._lbl_tier.setStyleSheet(f"color: {STATUS_OK}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
+            self._lbl_tier.setText("ACTIVE: TIER 3 (OPTICAL FALLBACK)")
+            self._lbl_tier.setStyleSheet(f"color: #FFB300; font-weight: bold; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
         else:
-            self._lbl_tier.setText("ACTIVE: TIER 1 (OFFLINE)")
+            self._lbl_tier.setText("ACTIVE: TIER 4 (SIMULATOR FALLBACK)")
             self._lbl_tier.setStyleSheet(f"color: {WARM_GRAPHITE}; padding: 4px 8px; border-radius: 4px; background: {SURFACE_1};")
 
     def _set_assist_level(self, level: str) -> None:

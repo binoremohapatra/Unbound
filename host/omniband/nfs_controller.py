@@ -49,6 +49,7 @@ class NFSRacingController:
         self.nos_active: bool = False
         self.handbrake_active: bool = False
         self.speedbreaker_active: bool = False
+        self.piezo_triggers_enabled: bool = False  # Piezo = Visual Telemetry Only by default
 
         # Piezo edge tracking
         self._jaw_down: bool = False
@@ -143,6 +144,9 @@ class NFSRacingController:
     def feed_somatic(self, channels: List[float], now: Optional[float] = None) -> None:
         """Process 3 piezo channels (CH1/CH2 temples, CH3 forehead)."""
         if not self.enabled:
+            return
+        if not getattr(self, "piezo_triggers_enabled", False):
+            # Piezo is VISUAL TELEMETRY ONLY. Disconnected from game actions.
             return
         if now is None:
             now = time.perf_counter()

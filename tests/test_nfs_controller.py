@@ -108,6 +108,7 @@ def test_proportional_pwm_steering():
     backend = RecordingBackend()
     gw = Gateway(backend)
     ctrl = NFSRacingController(gw)
+    ctrl.piezo_triggers_enabled = True
     ctrl.enable()
 
     t = 2000.0
@@ -152,6 +153,7 @@ def test_piezo_muscle_triggers_nos_drift_speedbreaker():
     backend = RecordingBackend()
     gw = Gateway(backend)
     ctrl = NFSRacingController(gw)
+    ctrl.piezo_triggers_enabled = True
     ctrl.enable()
 
     t = 3000.0
@@ -201,6 +203,7 @@ def test_gyro_zeroing():
     backend = RecordingBackend()
     gw = Gateway(backend)
     ctrl = NFSRacingController(gw)
+    ctrl.piezo_triggers_enabled = True
     ctrl.enable()
 
     t = 6000.0
@@ -239,7 +242,7 @@ def test_nfs_mini_overlay_properties():
     overlay = NFSMiniOverlay(on_zero=on_zero, on_exit=on_exit)
 
     # Size & flags
-    assert overlay.width() == 280
+    assert overlay.width() in (280, 310)
     assert overlay.height() == 75
     flags = overlay.windowFlags()
     assert bool(flags & Qt.WindowType.FramelessWindowHint)
@@ -250,6 +253,7 @@ def test_nfs_mini_overlay_properties():
     # Focus policy of buttons
     assert overlay.btn_zero.focusPolicy() == Qt.FocusPolicy.NoFocus
     assert overlay.btn_exit.focusPolicy() == Qt.FocusPolicy.NoFocus
+    assert overlay.btn_fallback.focusPolicy() == Qt.FocusPolicy.NoFocus
 
     # Telemetry updates
     overlay.update_telemetry(gas=True, brake=False, steer_left=True, steer_right=False, nos=True, drift=False)

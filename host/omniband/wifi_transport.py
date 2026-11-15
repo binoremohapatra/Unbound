@@ -155,9 +155,11 @@ class UnifiedGestureEngine:
         self,
         on_action: Optional[Callable[[str, Any], None]] = None,
         on_badge: Optional[Callable[[str], None]] = None,
+        enable_piezo_clicks: bool = True,
     ) -> None:
         self.on_action = on_action  # ("click", "left"), ("mouse_down", "left"), ("scroll", 3), etc.
         self.on_badge = on_badge    # "⚡ GESTURE: JAW HOLD (DRAGGING...)"
+        self.enable_piezo_clicks = enable_piezo_clicks
         self._lock = threading.Lock()
 
         # Jaw Clench / Tap / Hold state
@@ -232,6 +234,10 @@ class UnifiedGestureEngine:
             now = time.perf_counter()
 
         with self._lock:
+            if not self.enable_piezo_clicks:
+                # Piezo is VISUAL TELEMETRY ONLY. Disconnected from OS clicks/keys.
+                return
+
             # Check pending single tap timeout
             if self._single_tap_pending and now >= self._single_tap_deadline:
                 self._single_tap_pending = False
@@ -527,6 +533,7 @@ class OmniBandWifiClient:
         self.gesture_engine = UnifiedGestureEngine(
             on_action=on_gesture_action,
             on_badge=on_gesture_badge,
+            enable_piezo_clicks=False,  # Piezo = Visual Telemetry Only (No OS clicks from piezo)
         )
 
         self._running = False
@@ -704,22 +711,22 @@ class OmniBandWifiClient:
             if self.on_imu_telemetry:
                 self.on_imu_telemetry(dx, dy, pitch, roll)
 
-            # Route inline gesture/click/scroll if present
+            # Route inline gesture/click/scroll if present (Piezo is visual telemetry only: no OS clicks)
             click = pkt.get("click", "none")
             if click and click not in ("none", ""):
-                self.gesture_engine.feed_gesture(click)
+                # self.gesture_engine.feed_gesture(click)  # Disabled: Piezo visual telemetry only
                 if self.on_hardware_gesture:
                     self.on_hardware_gesture(click.upper())
 
             scroll = pkt.get("scroll", 0)
             if scroll != 0:
-                self.gesture_engine.feed_gesture("SCROLL_UP" if scroll > 0 else "SCROLL_DOWN")
+                # self.gesture_engine.feed_gesture("SCROLL_UP" if scroll > 0 else "SCROLL_DOWN")
                 if self.on_hardware_gesture:
                     self.on_hardware_gesture(f"SCROLL_{'UP' if scroll > 0 else 'DOWN'}")
 
             gesture = pkt.get("gesture", "")
             if gesture and gesture not in ("NONE", ""):
-                self.gesture_engine.feed_gesture(gesture)
+                # self.gesture_engine.feed_gesture(gesture)
                 if self.on_hardware_gesture:
                     self.on_hardware_gesture(gesture.upper())
 

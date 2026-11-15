@@ -394,6 +394,7 @@ class RealWebcamTracker:
         on_latch_changed: Optional[Callable[[str], None]] = None,
         on_universal_exit: Optional[Callable[[], None]] = None,
         on_head_mouse_toggled: Optional[Callable[[bool], None]] = None,
+        on_blink: Optional[Callable[[float], None]] = None,
         optical_calibrator: Optional[OpticalCalibrator] = None,
     ) -> None:
         self.camera_id = camera_id
@@ -407,6 +408,7 @@ class RealWebcamTracker:
         self.on_latch_changed = on_latch_changed
         self.on_universal_exit = on_universal_exit
         self.on_head_mouse_toggled = on_head_mouse_toggled
+        self.on_blink = on_blink
         self.calibrator = optical_calibrator or OpticalCalibrator()
 
         self._running = False
@@ -1035,6 +1037,11 @@ class RealWebcamTracker:
                 dur = now - self._bilateral_blink_start
                 self._bilateral_blink_start = 0.0
                 if 0.06 <= dur <= 0.40:
+                    if getattr(self, "on_blink", None):
+                        try:
+                            self.on_blink(now)
+                        except Exception:
+                            pass
                     self._blink_timestamps.append(now)
                     self._blink_timestamps = [t for t in self._blink_timestamps if now - t <= 1.60]
                     # Check 4-Blink (Quad-Blink) Toggle for Optical Fallback Head-Mouse
@@ -1225,6 +1232,13 @@ class RealWebcamTracker:
                     self.on_click()
 
         elif not is_blinking:
+            if self._blink_active:
+                dur = now - self._blink_start_time
+                if 0.06 <= dur <= 0.40 and getattr(self, "on_blink", None):
+                    try:
+                        self.on_blink(now)
+                    except Exception:
+                        pass
             self._blink_active = False
             self._long_blink_fired = False
 

@@ -35,11 +35,13 @@ class NFSMiniOverlay(QWidget):
         self,
         on_zero: Optional[Callable[[], None]] = None,
         on_exit: Optional[Callable[[], None]] = None,
+        on_toggle_fallback: Optional[Callable[[], None]] = None,
         parent: Optional[QWidget] = None,
     ) -> None:
         super().__init__(parent)
         self.on_zero = on_zero
         self.on_exit = on_exit
+        self.on_toggle_fallback = on_toggle_fallback
 
         # Window flags: Tool, StaysOnTop, Frameless, NoFocus
         self.setWindowFlags(
@@ -51,7 +53,7 @@ class NFSMiniOverlay(QWidget):
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, True)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, True)
         self.setWindowOpacity(0.85)
-        self.setFixedSize(280, 75)
+        self.setFixedSize(310, 75)
 
         self._drag_pos: Optional[QPoint] = None
 
@@ -73,6 +75,25 @@ class NFSMiniOverlay(QWidget):
         lbl_title.setStyleSheet("color: #FF6600; background: transparent;")
         top_bar.addWidget(lbl_title)
         top_bar.addStretch()
+
+        self.btn_fallback = QPushButton("🔄 MPU")
+        self.btn_fallback.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.btn_fallback.setFont(QFont("Segoe UI", 7, QFont.Weight.Bold))
+        self.btn_fallback.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.btn_fallback.setStyleSheet("""
+            QPushButton {
+                background: #0d2818;
+                color: #00FF66;
+                border: 1px solid #00FF66;
+                border-radius: 3px;
+                padding: 1px 5px;
+            }
+            QPushButton:hover {
+                background: #143d24;
+            }
+        """)
+        self.btn_fallback.clicked.connect(self._handle_toggle_fallback)
+        top_bar.addWidget(self.btn_fallback)
 
         self.btn_zero = QPushButton("🎯 Zero")
         self.btn_zero.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -183,6 +204,42 @@ class NFSMiniOverlay(QWidget):
         self._set_pill_active(self.pill_right, steer_right)
         self._set_pill_active(self.pill_nos, nos)
         self._set_pill_active(self.pill_drift, drift)
+
+    def _handle_toggle_fallback(self) -> None:
+        if self.on_toggle_fallback:
+            self.on_toggle_fallback()
+
+    def set_fallback_mode(self, fallback: bool) -> None:
+        """Update toggle button visual state."""
+        if hasattr(self, "btn_fallback"):
+            if fallback:
+                self.btn_fallback.setText("🟣 NOSE")
+                self.btn_fallback.setStyleSheet("""
+                    QPushButton {
+                        background: #2a0033;
+                        color: #D500F9;
+                        border: 1px solid #D500F9;
+                        border-radius: 3px;
+                        padding: 1px 5px;
+                    }
+                    QPushButton:hover {
+                        background: #3d0049;
+                    }
+                """)
+            else:
+                self.btn_fallback.setText("🔄 MPU")
+                self.btn_fallback.setStyleSheet("""
+                    QPushButton {
+                        background: #0d2818;
+                        color: #00FF66;
+                        border: 1px solid #00FF66;
+                        border-radius: 3px;
+                        padding: 1px 5px;
+                    }
+                    QPushButton:hover {
+                        background: #143d24;
+                    }
+                """)
 
     def _dock_top_right(self) -> None:
         """Place overlay at top-right corner of primary screen."""

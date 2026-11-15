@@ -118,6 +118,25 @@ for _row, _start in (("qwertyuiop", 0x10), ("asdfghjkl", 0x1E), ("zxcvbnm", 0x2C
 for _i in range(10):
     SCANCODES[f"f{_i + 1}"] = (0x3B + _i, False)
 
+# DirectInput extended scancode aliases for Need for Speed: Most Wanted & racing games
+SCANCODES["lshift"] = (0x2A, False)
+SCANCODES["rshift"] = (0x36, False)
+SCANCODES["lalt"] = (0x38, False)
+SCANCODES["ralt"] = (0x38, True)
+SCANCODES["lctrl"] = (0x1D, False)
+SCANCODES["rctrl"] = (0x1D, True)
+
+# NFS Action Map: dual WASD + Extended Arrow Keys for DirectInput
+NFS_ACTION_MAP: dict[str, list[str]] = {
+    "throttle": ["w", "up"],
+    "brake": ["s", "down"],
+    "steer_left": ["a", "left"],
+    "steer_right": ["d", "right"],
+    "handbrake": ["space"],
+    "nos": ["x", "lshift", "lalt"],
+    "speedbreaker": ["g"],
+}
+
 # Gamepad-style names -> keyboard/mouse. Override per game via Gateway(button_map=...).
 BUTTON_MAP: dict[str, tuple[str, str]] = {
     "A": ("key", "space"), "B": ("key", "c"), "X": ("key", "r"), "Y": ("key", "f"),
@@ -456,6 +475,32 @@ class Gateway:
             self._sync_locked()
         if held:
             log.warning("release_all (%s)", reason or "unspecified")
+
+    def set_nfs_action(self, action: str, down: bool) -> None:
+        """Stateful DirectInput racing input (sends dual WASD + Extended Arrow keys).
+        
+        Actions:
+          'throttle'     : W (0x11) + UP (0x48, extended=True)
+          'brake'        : S (0x1F) + DOWN (0x50, extended=True)
+          'steer_left'   : A (0x1E) + LEFT (0x4B, extended=True)
+          'steer_right'  : D (0x20) + RIGHT (0x4D, extended=True)
+          'handbrake'    : SPACE (0x39)
+          'nos'          : X (0x2D) + LSHIFT (0x2A) + LALT (0x38)
+          'speedbreaker' : G (0x22)
+        """
+        keys = NFS_ACTION_MAP.get(action.lower())
+        if not keys:
+            return
+        with self._lock:
+            for k in keys:
+                (self._want_keys.add if down else self._want_keys.discard)(k)
+            self._sync_locked()
+
+    def release_all_keys(self) -> None:
+        """Force release all held keyboard keys immediately."""
+        with self._lock:
+            self._want_keys.clear()
+            self._sync_locked()
 
     def update_maps(self, button_map: Optional[dict] = None, axis_map: Optional[dict] = None) -> None:
         """Swap key bindings while running (config hot-reload). Everything is released FIRST, so

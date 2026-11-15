@@ -52,6 +52,8 @@ from host.omniband.hardware.ble_client import OmniBandBleClient
 from host.omniband.hardware.hardware_calibration import HardwareCalibrator
 from host.omniband.tracking.optical_calibration import OpticalCalibrator, OpticalCalibrationProfile
 from host.omniband.app.text_focus_watcher import TextFocusWatcher
+from host.omniband.nfs_controller import NFSRacingController
+from host.omniband.app.nfs_overlay import NFSMiniOverlay
 from host.omniband.app.touch_keyboard import (
     show_microsoft_keyboard,
     hide_microsoft_keyboard,
@@ -166,6 +168,19 @@ class MainWindow(QMainWindow):
         from gateway import Gateway, SendInputBackend
         self.gw = Gateway(SendInputBackend())
         self.gw.install_exit_handlers()
+
+        # DirectInput NFS Racing Controller & Compact Always-on-Top Mini Overlay
+        self.nfs_controller = NFSRacingController(
+            gateway=self.gw,
+            on_telemetry=self._on_nfs_telemetry,
+        )
+        self.nfs_overlay = NFSMiniOverlay(
+            on_zero=self.nfs_controller.zero_gyro,
+            on_exit=self._exit_nfs_mode,
+        )
+        self._nfs_tick_timer = QTimer(self)
+        self._nfs_tick_timer.setInterval(16)
+        self._nfs_tick_timer.timeout.connect(self._on_nfs_tick)
         if hasattr(self, "_chk_allow_all"):
             self.gw.process_gate.allow_all = self._chk_allow_all.isChecked()
             self._chk_allow_all.toggled.connect(lambda chk: setattr(self.gw.process_gate, "allow_all", chk))
@@ -268,6 +283,7 @@ class MainWindow(QMainWindow):
             on_status_change=lambda msg: self.sig_hw_status.emit(msg),
             on_gesture_action=self._on_gesture_engine_action,
             on_gesture_badge=self._on_gesture_badge_update,
+            on_imu_telemetry=self._on_wifi_imu_telemetry,
         )
         self.wifi_client.start()
 
@@ -728,19 +744,19 @@ class MainWindow(QMainWindow):
         # Gaming Profile Row: NFS Most Wanted / Racing Controls
         gaming_profile_row = QHBoxLayout()
         gaming_profile_row.setSpacing(10)
-        self._btn_nfs_mode = QPushButton("🏎️ GAMING PROFILE: DESKTOP MOUSE (Click to switch to NFS Most Wanted)")
+        self._btn_nfs_mode = QPushButton("🏎️ NFS OVERLAY MODE (Compact Mini HUD)")
         self._btn_nfs_mode.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
-        self._btn_nfs_mode.setStyleSheet(f"""
-            QPushButton {{
-                background-color: {SURFACE_1};
-                color: #00E5FF;
-                border: 1px solid #00E5FF;
+        self._btn_nfs_mode.setStyleSheet("""
+            QPushButton {
+                background-color: #22140a;
+                color: #FF6600;
+                border: 2px solid #FF6600;
                 border-radius: 4px;
                 padding: 6px 14px;
-            }}
-            QPushButton:hover {{
-                background-color: #003344;
-            }}
+            }
+            QPushButton:hover {
+                background-color: #3b1e0f;
+            }
         """)
         self._btn_nfs_mode.clicked.connect(self._toggle_nfs_mode)
         gaming_profile_row.addWidget(self._btn_nfs_mode)
@@ -1584,57 +1600,57 @@ class MainWindow(QMainWindow):
         self._save_mpu_config()
         self.calib.append_log(f"MPU Inversion updated: InvX={self.invert_mpu_x}, InvY={self.invert_mpu_y}, SwapXY={self.swap_mpu_xy}")
 
+    def _enter_nfs_mode(self) -> None:
+        """Activate NFS Racing mode, hide bulky main dashboard, show compact mini overlay."""
+        self.nfs_mode = True
+        if hasattr(self, "nfs_controller"):
+            self.nfs_controller.enable()
+        if hasattr(self, "_nfs_tick_timer"):
+            self._nfs_tick_timer.start(16)
+        if hasattr(self, "wifi_client"):
+            self.wifi_client.gesture_engine.set_profile("nfs")
+        if hasattr(self, "_btn_nfs_mode"):
+            self._btn_nfs_mode.setText("🏎️ NFS OVERLAY ACTIVE (Click to Exit)")
+        self.hide()
+        if hasattr(self, "nfs_overlay"):
+            self.nfs_overlay.show()
+        self.calib.append_log("🏎️ NFS OVERLAY MODE ACTIVATED: Auto-Gas ON, Proportional PWM Steering ON, Mini Overlay Visible")
+
+    def _exit_nfs_mode(self) -> None:
+        """Deactivate NFS Racing mode, hide overlay, release all keys, restore main HUD."""
+        self.nfs_mode = False
+        if hasattr(self, "_nfs_tick_timer"):
+            self._nfs_tick_timer.stop()
+        if hasattr(self, "nfs_controller"):
+            self.nfs_controller.disable()
+        if hasattr(self, "wifi_client"):
+            self.wifi_client.gesture_engine.set_profile("desktop")
+        self.gw.release_all_keys()
+        if hasattr(self, "nfs_overlay"):
+            self.nfs_overlay.hide()
+        if hasattr(self, "_btn_nfs_mode"):
+            self._btn_nfs_mode.setText("🏎️ NFS OVERLAY MODE (Compact Mini HUD)")
+        self.showNormal()
+        self.activateWindow()
+        self.calib.append_log("🖥️ NFS OVERLAY MODE EXITED: Restored Main HUD, all driving keys released")
+
     def _toggle_nfs_mode(self) -> None:
-        """Toggle between Desktop Mouse Navigation and NFS Most Wanted Gaming Mode."""
-        self.nfs_mode = not getattr(self, "nfs_mode", False)
-        if self.nfs_mode:
-            if hasattr(self, "wifi_client"):
-                self.wifi_client.gesture_engine.set_profile("nfs")
-            self._btn_nfs_mode.setText("🏎️ GAMING PROFILE: NFS MOST WANTED (W=Gas, S=Brake, A=Left, D=Right, SPACE=Handbrake) [ACTIVE]")
-            self._btn_nfs_mode.setStyleSheet("""
-                QPushButton {
-                    background-color: #3b1100;
-                    color: #FF6600;
-                    border: 2px solid #FF6600;
-                    border-radius: 4px;
-                    padding: 6px 14px;
-                    font-weight: bold;
-                }
-                QPushButton:hover {
-                    background-color: #551a00;
-                }
-            """)
-            if hasattr(self, "_lbl_hw_mpu_pill"):
-                self._lbl_hw_mpu_pill.setText("MPU Motion: MUTED (NFS Mode Active)")
-                self._lbl_hw_mpu_pill.setStyleSheet("background: #2a1100; color: #FF6600; font-weight: bold; padding: 3px 6px; border-radius: 3px; border: 1px solid #FF6600;")
-            if hasattr(self, "_lbl_active_gesture_badge"):
-                self._lbl_active_gesture_badge.setText("🏎️ [NFS] READY — Clench Jaw for Gas (W)")
-            self.status.showMessage("🏎️ NFS Most Wanted Gaming Mode ACTIVATED! MPU cursor muted.", 5000)
-            self.calib.append_log("🏎️ PROFILE ACTIVATED: NFS Most Wanted (W=Gas, S=Brake, A=Left, D=Right, SPACE=Handbrake, MPU=OFF)")
+        if getattr(self, "nfs_mode", False):
+            self._exit_nfs_mode()
         else:
-            if hasattr(self, "wifi_client"):
-                self.wifi_client.gesture_engine.set_profile("desktop")
-            self.gw.release_all("NFS Mode Deactivated")
-            self._btn_nfs_mode.setText("🏎️ GAMING PROFILE: DESKTOP MOUSE (Click to switch to NFS Most Wanted)")
-            self._btn_nfs_mode.setStyleSheet(f"""
-                QPushButton {{
-                    background-color: {SURFACE_1};
-                    color: #00E5FF;
-                    border: 1px solid #00E5FF;
-                    border-radius: 4px;
-                    padding: 6px 14px;
-                }}
-                QPushButton:hover {{
-                    background-color: #003344;
-                }}
-            """)
-            if hasattr(self, "_lbl_hw_mpu_pill"):
-                self._lbl_hw_mpu_pill.setText("MPU6050 Motion: Ready (Hardware Priority)")
-                self._lbl_hw_mpu_pill.setStyleSheet("background: #111; color: #00E5FF; padding: 3px 6px; border-radius: 3px; border: 1px solid #333;")
-            if hasattr(self, "_lbl_active_gesture_badge"):
-                self._lbl_active_gesture_badge.setText("⚡ GESTURE: READY")
-            self.status.showMessage("🖥️ Desktop Mouse Mode Restored.", 3000)
-            self.calib.append_log("🖥️ PROFILE ACTIVATED: Desktop Mouse Mode Restored")
+            self._enter_nfs_mode()
+
+    def _on_nfs_tick(self) -> None:
+        if getattr(self, "nfs_mode", False) and hasattr(self, "nfs_controller"):
+            self.nfs_controller.tick(time.perf_counter())
+
+    def _on_nfs_telemetry(self, gas: bool, brake: bool, steer_left: bool, steer_right: bool, nos: bool, drift: bool) -> None:
+        if hasattr(self, "nfs_overlay") and self.nfs_overlay.isVisible():
+            self.nfs_overlay.update_telemetry(gas, brake, steer_left, steer_right, nos, drift)
+
+    def _on_wifi_imu_telemetry(self, dx: float, dy: float, pitch: float, roll: float) -> None:
+        if getattr(self, "nfs_mode", False) and hasattr(self, "nfs_controller"):
+            self.nfs_controller.feed_imu(dx, dy, pitch, roll)
 
     def _revert_gesture_badge(self) -> None:
         if hasattr(self, "_lbl_active_gesture_badge"):
@@ -1765,6 +1781,8 @@ class MainWindow(QMainWindow):
         self.calib.set_ble_metrics(self.ble_client.is_connected, f"OmniBand-{transport}", rssi, rate)
 
     def _on_ble_frame_event(self, ch_vals: list[float], active: list[bool], seq: int) -> None:
+        if getattr(self, "nfs_mode", False) and hasattr(self, "nfs_controller"):
+            self.nfs_controller.feed_somatic(ch_vals)
         try:
             # Feed calibration wizard if active
             self.calib.feed_sample(ch_vals)
@@ -2107,6 +2125,10 @@ class MainWindow(QMainWindow):
 
     def _stop_workers(self) -> None:
         self._emergency_release_all()
+        if hasattr(self, "nfs_controller"):
+            self.nfs_controller.disable()
+        if hasattr(self, "nfs_overlay"):
+            self.nfs_overlay.close()
         for attr in ("webcam_tracker", "key_poller", "watcher", "focus_watcher", "ble_client", "wifi_client"):
             obj = getattr(self, attr, None)
             if obj and hasattr(obj, "stop"):
@@ -2114,7 +2136,7 @@ class MainWindow(QMainWindow):
                     obj.stop()
                 except Exception:
                     pass
-        for timer_attr in ("_cursor_timer", "_scroll_timer"):
+        for timer_attr in ("_cursor_timer", "_scroll_timer", "_nfs_tick_timer"):
             t = getattr(self, timer_attr, None)
             if t and hasattr(t, "stop"):
                 try:

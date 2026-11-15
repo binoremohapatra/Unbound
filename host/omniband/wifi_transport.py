@@ -511,6 +511,7 @@ class OmniBandWifiClient:
         on_status_change: Optional[Callable[[str], None]] = None,
         on_gesture_action: Optional[Callable[[str, Any], None]] = None,
         on_gesture_badge: Optional[Callable[[str], None]] = None,
+        on_imu_telemetry: Optional[Callable[[float, float, float, float], None]] = None,
     ) -> None:
         self.port = port
         self.esp_ip = esp_ip
@@ -521,6 +522,7 @@ class OmniBandWifiClient:
         self.on_connection_change = on_connection_change
         self.on_metrics_update = on_metrics_update
         self.on_status_change = on_status_change
+        self.on_imu_telemetry = on_imu_telemetry
 
         self.gesture_engine = UnifiedGestureEngine(
             on_action=on_gesture_action,
@@ -697,6 +699,10 @@ class OmniBandWifiClient:
             # Route IMU motion deltas if present
             if (abs(dx) > 0.001 or abs(dy) > 0.001) and self.on_imu_motion:
                 self.on_imu_motion(dx, dy)
+
+            # Route complete IMU telemetry (dx, dy, pitch, roll) to subscribers (e.g. NFS racing engine)
+            if self.on_imu_telemetry:
+                self.on_imu_telemetry(dx, dy, pitch, roll)
 
             # Route inline gesture/click/scroll if present
             click = pkt.get("click", "none")

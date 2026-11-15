@@ -596,7 +596,7 @@ def test_mpu_inversion_and_gesture_badge(qapp):
     assert win.nfs_mode is False
     win._toggle_nfs_mode()
     assert win.nfs_mode is True
-    assert "NFS MOST WANTED" in win._btn_nfs_mode.text()
+    assert "NFS OVERLAY ACTIVE" in win._btn_nfs_mode.text()
 
     # In NFS Mode, MPU motion must be completely muted!
     win._on_imu_motion_event(10.0, 5.0)
@@ -618,7 +618,7 @@ def test_mpu_inversion_and_gesture_badge(qapp):
     # Toggle back to Desktop mode
     win._toggle_nfs_mode()
     assert win.nfs_mode is False
-    assert "DESKTOP MOUSE" in win._btn_nfs_mode.text()
+    assert "NFS OVERLAY MODE" in win._btn_nfs_mode.text()
 
     win.gw.apply = orig_apply
     win.stop()

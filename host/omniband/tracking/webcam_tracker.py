@@ -379,7 +379,7 @@ class RealWebcamTracker:
       S4: NO_FACE state -> Cursor frozen, HUD alignment guide.
     """
 
-    DEADZONE: float = 0.012
+    DEADZONE: float = 0.024
 
     def __init__(
         self,
@@ -564,7 +564,7 @@ class RealWebcamTracker:
         self._base_x = 0.0
         self._base_y = 0.0
         self._calibrated = False
-        self._face_first_seen = False
+        self._face_first_seen = True
         t = time.perf_counter()
         self.filter_dx.reset(t, 0.0)
         self.filter_dy.reset(t, 0.0)
@@ -930,7 +930,11 @@ class RealWebcamTracker:
     def _update_velocity(self, res: TrackerResult, now: float, w: int, h: int) -> None:
         if res.face_found and not self._face_first_seen:
             self._face_first_seen = True
-            self.recenter()
+            if res.nose_tip is not None:
+                self._base_x = res.nose_tip[0]
+                self._base_y = res.nose_tip[1]
+                self._calibrated = True
+                self._calib_frames = 15
 
         if not self._calibrated and res.face_found and res.nose_tip is not None:
             self._base_x += res.nose_tip[0]

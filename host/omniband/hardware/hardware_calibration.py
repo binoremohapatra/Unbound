@@ -174,10 +174,11 @@ class HardwareCalibrator:
         if now is None:
             now = time.perf_counter()
 
-        # Step A: Baseline subtract & software gain
+        # Step A: Baseline subtract & software gain (ensuring inputs are normalized in [0.0, 1.0])
+        norm_in = [float(x) / 4095.0 if float(x) > 1.0 else float(x) for x in raw_channels]
         processed = [0.0] * 4
-        for i in range(4):
-            val = (raw_channels[i] - self.profile.mu[i]) * self.profile.gains[i]
+        for i in range(min(4, len(norm_in))):
+            val = (norm_in[i] - self.profile.mu[i]) * self.profile.gains[i]
             processed[i] = max(0.0, min(1.0, val))
 
         # Step B: Cross-Talk Dominance Gate

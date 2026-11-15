@@ -866,9 +866,10 @@ class MainWindow(QMainWindow):
 
         now = time.perf_counter()
         hw_connected = (hasattr(self, "wifi_client") and self.wifi_client.is_connected) or (hasattr(self, "ble_client") and self.ble_client.is_connected)
-        if hw_connected:
-            if now - getattr(self, "_last_mpu_motion_time", 0.0) < 1.0:
-                return  # MPU is healthy & driving cursor — suppress optical head-mouse!
+        if hw_connected and getattr(self, "_mpu_detected", False):
+            return  # Hardware MPU is primary cursor — suppress optical head-mouse to avoid fighting!
+        if hw_connected and (now - getattr(self, "_last_mpu_motion_time", 0.0) < 2.0):
+            return  # MPU recently active — suppress optical head-mouse!
 
         if now < self.webcam_tracker.freeze_until:
             return
@@ -1301,11 +1302,13 @@ class MainWindow(QMainWindow):
         cmds = []
 
         if ch == 1:
-            cmds.append(OutputCommand(kind="key", name="a", pressed=down))
-            self._lbl_proof_last.setText(f"LAST: Face L -> Steer Left 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
+            if is_racing_game:
+                cmds.append(OutputCommand(kind="key", name="a", pressed=down))
+                self._lbl_proof_last.setText(f"LAST: Face L -> Steer Left 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 2:
-            cmds.append(OutputCommand(kind="key", name="d", pressed=down))
-            self._lbl_proof_last.setText(f"LAST: Face R -> Steer Right 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
+            if is_racing_game:
+                cmds.append(OutputCommand(kind="key", name="d", pressed=down))
+                self._lbl_proof_last.setText(f"LAST: Face R -> Steer Right 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 3:
             if is_racing_game:
                 cmds.append(OutputCommand(kind="key", name="w", pressed=down))
@@ -1346,18 +1349,18 @@ class MainWindow(QMainWindow):
         cmds = []
 
         if ch == 1:
-            # CH1: Left Temple (Temporalis) -> Steer Left 'a'
-            if is_racing_game or getattr(self.gw.process_gate, "allow_all", False):
+            # CH1: Left Temple (Temporalis) -> Steer Left 'a' ONLY during racing games
+            if is_racing_game:
                 cmds.append(OutputCommand(kind="key", name="a", pressed=down))
                 self._lbl_proof_last.setText(f"LAST: CH1 Left Temple -> Steer Left 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 2:
-            # CH2: Right Temple (Temporalis) -> Steer Right 'd'
-            if is_racing_game or getattr(self.gw.process_gate, "allow_all", False):
+            # CH2: Right Temple (Temporalis) -> Steer Right 'd' ONLY during racing games
+            if is_racing_game:
                 cmds.append(OutputCommand(kind="key", name="d", pressed=down))
                 self._lbl_proof_last.setText(f"LAST: CH2 Right Temple -> Steer Right 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 3:
-            # CH3: Forehead (Frontalis) -> Eyebrow Raise -> Throttle 'w'
-            if is_racing_game or getattr(self.gw.process_gate, "allow_all", False):
+            # CH3: Forehead (Frontalis) -> Eyebrow Raise -> Throttle 'w' ONLY during racing games
+            if is_racing_game:
                 cmds.append(OutputCommand(kind="key", name="w", pressed=down))
                 self._lbl_proof_last.setText(f"LAST: CH3 Brow/Forehead -> Throttle 'w' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 4:
@@ -1728,6 +1731,11 @@ class MainWindow(QMainWindow):
             dx = -dx
         if getattr(self, "invert_mpu_y", True):
             dy = -dy
+
+        # MPU cursor gain: customizable multiplier (defaults to 1.0)
+        mpu_gain = float(getattr(self, "mpu_sensitivity", 1.0))
+        dx *= mpu_gain
+        dy *= mpu_gain
 
         if abs(dx) > 0.01 or abs(dy) > 0.01:
             self._last_mpu_motion_time = time.perf_counter()

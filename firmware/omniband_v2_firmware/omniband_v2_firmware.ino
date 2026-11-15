@@ -201,8 +201,8 @@ static void dsp_task(void*) {
             // ~62.5 Hz Wi-Fi UDP & 25 Hz BLE Stream (every 8 samples @ 500 Hz = 16 ms)
             if (++ble_scnt >= 8) {
                 ble_scnt = 0;
-                float dx = 0.0f, dy = 0.0f;
-                g_mpu.read(dx, dy);
+                float dx = 0.0f, dy = 0.0f, pitch = 0.0f, roll = 0.0f;
+                g_mpu.read(dx, dy, pitch, roll);
 
                 // 1. Ultra-Low-Latency Wi-Fi UDP Broadcast to 255.255.255.255:4210
                 g_wifi.send_telemetry(
@@ -212,7 +212,10 @@ static void dsp_task(void*) {
                     (int32_t)ble_env_peak[3],
                     (uint32_t)esp_timer_get_time(),
                     dx,
-                    dy
+                    dy,
+                    pitch,
+                    roll,
+                    "NONE"
                 );
 
                 // 2. Fallback BLE stream

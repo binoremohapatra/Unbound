@@ -17,6 +17,7 @@ from host.omniband.wifi_transport import (
     DEFAULT_ESP_IP,
     DEFAULT_UDP_PORT,
     OmniBandWifiClient,
+    UnifiedGestureEngine,
     parse_wifi_packet,
 )
 
@@ -135,3 +136,102 @@ def test_wifi_client_probe_trigger_ping():
         client.trigger_ping()
         assert mock_sock.sendto.call_count == 2
         mock_sock.close.assert_called_once()
+
+
+def test_unified_gesture_engine_jaw_clench_and_double_tap():
+    actions = []
+    badges = []
+    engine = UnifiedGestureEngine(
+        on_action=lambda act, val: actions.append((act, val)),
+        on_badge=lambda b: badges.append(b),
+    )
+
+    t0 = 100.0
+    # 1. Single Jaw Clench spike (< 450ms, e.g. 50ms)
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t0)
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t0 + 0.05)
+    # Poll after timeout (0.3s)
+    engine.poll(now=t0 + 0.35)
+    assert ("click", "left") in actions
+    assert any("JAW CLENCH" in b for b in badges)
+
+    # 2. Jaw Double-Tap (2 spikes within 450ms)
+    actions.clear()
+    badges.clear()
+    t1 = 200.0
+    # First spike
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t1)
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t1 + 0.04)
+    # Second spike at 150ms later
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t1 + 0.15)
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t1 + 0.19)
+
+    assert ("click", "right") in actions
+    assert any("DOUBLE-TAP" in b for b in badges)
+
+
+def test_unified_gesture_engine_jaw_hold_and_release():
+    actions = []
+    badges = []
+    engine = UnifiedGestureEngine(
+        on_action=lambda act, val: actions.append((act, val)),
+        on_badge=lambda b: badges.append(b),
+    )
+
+    t0 = 300.0
+    # Start clench
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t0)
+    # Clench sustained beyond 450ms
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t0 + 0.46)
+    assert ("mouse_down", "left") in actions
+    assert any("DRAGGING" in b for b in badges)
+
+    # Release clench
+    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t0 + 0.60)
+    assert ("mouse_up", "left") in actions
+    assert any("DROPPED" in b for b in badges)
+
+
+def test_unified_gesture_engine_optical_and_imu_gestures():
+    actions = []
+    badges = []
+    engine = UnifiedGestureEngine(
+        on_action=lambda act, val: actions.append((act, val)),
+        on_badge=lambda b: badges.append(b),
+    )
+
+    t = 400.0
+    # 1. Left Eye Close & Release
+    engine.feed_optical(left_ear=0.10, right_ear=0.30, now=t)
+    engine.feed_optical(left_ear=0.30, right_ear=0.30, now=t + 0.15)
+    assert ("click", "left") in actions
+    assert any("LEFT EYE WINK" in b for b in badges)
+
+    # 2. Right Eye Close & Release
+    actions.clear()
+    badges.clear()
+    engine.feed_optical(left_ear=0.30, right_ear=0.10, now=t + 0.3)
+    engine.feed_optical(left_ear=0.30, right_ear=0.30, now=t + 0.45)
+    assert ("click", "right") in actions
+    assert any("RIGHT EYE WINK" in b for b in badges)
+
+    # 3. Smile Gesture -> Enter
+    actions.clear()
+    badges.clear()
+    engine.feed_optical(smile=0.60, now=t + 0.6)
+    assert ("key", "enter") in actions
+    assert any("SMILE" in b for b in badges)
+
+    # 4. Eyebrow Raise (CH2+CH3) -> Scroll UP (dy=+3)
+    actions.clear()
+    badges.clear()
+    engine.feed_somatic([0.1, 0.6, 0.6, 0.1], now=t + 0.8)
+    assert ("scroll", 3) in actions
+    assert any("BROW RAISE" in b for b in badges)
+
+    # 5. Head Nod (MPU Pitch Down) -> Scroll DOWN (dy=-3)
+    actions.clear()
+    badges.clear()
+    engine.feed_imu(dx=0.0, dy=0.0, pitch=-18.0, roll=0.0, now=t + 1.0)
+    assert ("scroll", -3) in actions
+    assert any("HEAD NOD" in b for b in badges)

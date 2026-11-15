@@ -53,21 +53,40 @@ void MpuFront::begin() {
 }
 
 void MpuFront::read(float &dx, float &dy) {
+    float pitch = 0.0f, roll = 0.0f;
+    read(dx, dy, pitch, roll);
+}
+
+void MpuFront::read(float &dx, float &dy, float &pitch, float &roll) {
     dx = 0.0f;
     dy = 0.0f;
+    pitch = 0.0f;
+    roll = 0.0f;
     if (!available_) return;
 
+    // Read 14 bytes starting at ACCEL_XOUT_H (0x3B)
     Wire.beginTransmission(omniband::hw::MPU_I2C_ADDR);
-    Wire.write(0x43);
+    Wire.write(0x3B);
     if (Wire.endTransmission(false) != 0) {
         available_ = false;
         return;
     }
-    Wire.requestFrom((uint8_t)omniband::hw::MPU_I2C_ADDR, (uint8_t)6);
-    if (Wire.available() >= 6) {
-        int16_t rawX = (Wire.read() << 8) | Wire.read(); // Pitch -> dy
-        int16_t rawY = (Wire.read() << 8) | Wire.read(); // Roll
-        int16_t rawZ = (Wire.read() << 8) | Wire.read(); // Yaw   -> dx
+    Wire.requestFrom((uint8_t)omniband::hw::MPU_I2C_ADDR, (uint8_t)14);
+    if (Wire.available() >= 14) {
+        int16_t ax = (Wire.read() << 8) | Wire.read();
+        int16_t ay = (Wire.read() << 8) | Wire.read();
+        int16_t az = (Wire.read() << 8) | Wire.read();
+        (void)Wire.read(); (void)Wire.read(); // skip temp
+        int16_t rawX = (Wire.read() << 8) | Wire.read(); // Pitch gyro
+        int16_t rawY = (Wire.read() << 8) | Wire.read(); // Roll gyro
+        int16_t rawZ = (Wire.read() << 8) | Wire.read(); // Yaw gyro
+
+        // Compute pitch & roll angles in degrees
+        float f_ax = (float)ax;
+        float f_ay = (float)ay;
+        float f_az = (float)az;
+        pitch = atan2(f_ay, sqrt(f_ax * f_ax + f_az * f_az)) * 57.29578f;
+        roll  = atan2(-f_ax, f_az) * 57.29578f;
 
         float gz = (float)rawZ - gyro_bias_z_;
         float gx = (float)rawX - gyro_bias_x_;
@@ -83,5 +102,9 @@ void MpuFront::read(float &dx, float &dy) {
             float excess = (gx > 0) ? (gx - DEADZONE) : (gx + DEADZONE);
             dy = (excess / SENSITIVITY);
         }
+
+        // Direct firmware axis inversion to correct upside-down/inverted physical mounting
+        dx = -dx;
+        dy = -dy;
     }
 }

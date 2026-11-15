@@ -539,3 +539,58 @@ def test_microsoft_keyboard_cascade_and_registry():
     w.stop()
 
 
+def test_mpu_inversion_and_gesture_badge(qapp):
+    from host.omniband.app.main_window import MainWindow
+
+    win = MainWindow()
+    assert hasattr(win, "_chk_invert_mpu_x")
+    assert hasattr(win, "_chk_invert_mpu_y")
+    assert hasattr(win, "_chk_swap_mpu_xy")
+    assert hasattr(win, "_lbl_active_gesture_badge")
+
+    # Verify initial defaults
+    assert win.invert_mpu_x is True
+    assert win.invert_mpu_y is True
+    assert win.swap_mpu_xy is False
+
+    # Toggle Invert X
+    win._chk_invert_mpu_x.setChecked(False)
+    assert win.invert_mpu_x is False
+
+    # Toggle Invert Y
+    win._chk_invert_mpu_y.setChecked(False)
+    assert win.invert_mpu_y is False
+
+    # Toggle Swap XY
+    win._chk_swap_mpu_xy.setChecked(True)
+    assert win.swap_mpu_xy is True
+
+    # Test MPU relative motion dispatch with Swap XY
+    moved = []
+    win.gw.move_cursor_relative = lambda dx, dy: moved.append((dx, dy))
+    win._on_imu_motion_event(10.0, 5.0)
+    assert len(moved) == 1
+    # Swapped: x becomes 5.0, y becomes 10.0 (neither inverted)
+    assert moved[0] == (5.0, 10.0)
+
+    # Re-enable inversions:
+    win._chk_invert_mpu_x.setChecked(True)
+    win._chk_invert_mpu_y.setChecked(True)
+    win._chk_swap_mpu_xy.setChecked(False)
+    moved.clear()
+    win._on_imu_motion_event(10.0, 5.0)
+    assert moved[0] == (-10.0, -5.0)
+
+    # Test Active Gesture Badge
+    win._on_gesture_badge_update("⚡ GESTURE: JAW HOLD (DRAGGING...)")
+    assert win._lbl_active_gesture_badge.text() == "⚡ GESTURE: JAW HOLD (DRAGGING...)"
+
+    win._on_gesture_badge_update("👁️ LEFT EYE WINK")
+    assert win._lbl_active_gesture_badge.text() == "👁️ LEFT EYE WINK"
+
+    win._on_gesture_badge_update("😊 SMILE")
+    assert win._lbl_active_gesture_badge.text() == "😊 SMILE"
+
+    win.close()
+
+

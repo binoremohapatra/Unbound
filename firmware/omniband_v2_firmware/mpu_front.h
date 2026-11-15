@@ -8,6 +8,7 @@ class MpuFront {
 public:
     void begin();
     void read(float &dx, float &dy);
+    void read(float &dx, float &dy, float &pitch, float &roll);
     bool is_available() const { return available_; }
 
 private:

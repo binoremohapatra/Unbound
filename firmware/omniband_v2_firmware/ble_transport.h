@@ -7,9 +7,11 @@
 #include <BLE2902.h>
 #include <BLECharacteristic.h>
 
+#ifndef MOUSE_BTN_LEFT
 #define MOUSE_BTN_LEFT   0x01
 #define MOUSE_BTN_RIGHT  0x02
 #define MOUSE_BTN_MIDDLE 0x04
+#endif
 
 class OmniBandBleServer : public BLEServerCallbacks, public BLECharacteristicCallbacks {
 public:

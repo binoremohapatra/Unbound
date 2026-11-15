@@ -24,6 +24,7 @@
 #include "config_store.h"
 #include "link.h"
 #include "wifi_transport.h"
+#include "ble_transport.h"
 #include "oled_ui.h"
 #include "cal.h"
 

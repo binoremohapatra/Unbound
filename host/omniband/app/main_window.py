@@ -550,13 +550,13 @@ class MainWindow(QMainWindow):
         pills_layout.setSpacing(6)
         pill_css = f"background: {SURFACE_2}; border: 1px solid {BORDER}; padding: 4px 6px; border-radius: 4px; font-family: 'Cascadia Code', monospace; font-size: 10px;"
 
-        self._pill_ch1 = QLabel("CH1 (LEFT): 0.00")
+        self._pill_ch1 = QLabel("CH1 (TEMPLE-L/JAW): 0.00")
         self._pill_ch1.setStyleSheet(f"{pill_css} color: {BURNT_ORANGE}; font-weight: bold;")
 
-        self._pill_ch2 = QLabel("CH2 (RIGHT): 0.00")
+        self._pill_ch2 = QLabel("CH2 (TEMPLE-R): 0.00")
         self._pill_ch2.setStyleSheet(f"{pill_css} color: #a8ff78; font-weight: bold;")
 
-        self._pill_ch3 = QLabel("CH3 (FOREHEAD/JAW): 0.00")
+        self._pill_ch3 = QLabel("CH3 (FOREHEAD/BROW): 0.00")
         self._pill_ch3.setStyleSheet(f"{pill_css} color: #ffcc00; font-weight: bold;")
 
         self._pill_ch4 = QLabel("CH4 (DISABLED): ADC2/WiFi")
@@ -1119,9 +1119,9 @@ class MainWindow(QMainWindow):
             if not hw_connected:
                 self.scope.push_sample(vals, active)
                 if hasattr(self, "_pill_ch1"):
-                    self._pill_ch1.setText(f"CH1 (LEFT): {vals[0]:.2f}")
-                    self._pill_ch2.setText(f"CH2 (RIGHT): {vals[1]:.2f}")
-                    self._pill_ch3.setText(f"CH3 (JAW/CLENCH): {vals[2]:.2f}")
+                    self._pill_ch1.setText(f"CH1 (TEMPLE-L/JAW): {vals[0]:.2f}")
+                    self._pill_ch2.setText(f"CH2 (TEMPLE-R): {vals[1]:.2f}")
+                    self._pill_ch3.setText(f"CH3 (FOREHEAD/BROW): {vals[2]:.2f}")
                     self._pill_ch4.setText(f"CH4 (DISABLED): ADC2/WiFi")
         except Exception:
             pass

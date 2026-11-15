@@ -115,10 +115,9 @@ int32_t AdcFront::read(int ch) {
     }
     if (out_val > 4095) out_val = 4095;
 
-    // Cache CH3 (forehead/primary) envelope for CH4 digital-spike cross-coupling.
-    // CH3 is the new primary jaw-clench channel; coupling to CH4 fallback still valid.
-    if (ch == 2) {
-        ch1_last_envelope_ = out_val;  // variable reused — represents "primary channel envelope"
+    // Cache CH1 (left temple / primary jaw clench channel) for CH4 digital-spike coupling.
+    if (ch == 0) {
+        ch1_last_envelope_ = out_val;  // temporalis envelope — feeds CH4 fallback cross-coupling
     }
 
     last_us_ = micros() - t0;

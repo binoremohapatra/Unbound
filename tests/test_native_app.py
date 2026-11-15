@@ -591,6 +591,36 @@ def test_mpu_inversion_and_gesture_badge(qapp):
     win._on_gesture_badge_update("😊 SMILE")
     assert win._lbl_active_gesture_badge.text() == "😊 SMILE"
 
+    # Test NFS Gaming Mode Toggle & MPU Muting
+    moved.clear()
+    assert win.nfs_mode is False
+    win._toggle_nfs_mode()
+    assert win.nfs_mode is True
+    assert "NFS MOST WANTED" in win._btn_nfs_mode.text()
+
+    # In NFS Mode, MPU motion must be completely muted!
+    win._on_imu_motion_event(10.0, 5.0)
+    assert len(moved) == 0
+
+    # Key down / key up routing
+    from core.events import OutputCommand
+    applied_cmds = []
+    orig_apply = win.gw.apply
+    win.gw.apply = lambda cmds: applied_cmds.extend(cmds)
+
+    win._on_gesture_engine_action("key_down", "w")
+    assert any(c.kind == "key" and c.name == "w" and c.pressed is True for c in applied_cmds)
+
+    applied_cmds.clear()
+    win._on_gesture_engine_action("key_up", "w")
+    assert any(c.kind == "key" and c.name == "w" and c.pressed is False for c in applied_cmds)
+
+    # Toggle back to Desktop mode
+    win._toggle_nfs_mode()
+    assert win.nfs_mode is False
+    assert "DESKTOP MOUSE" in win._btn_nfs_mode.text()
+
+    win.gw.apply = orig_apply
     win.close()
 
 

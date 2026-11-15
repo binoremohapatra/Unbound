@@ -239,3 +239,85 @@ def test_unified_gesture_engine_optical_and_imu_gestures():
     engine.feed_imu(dx=0.0, dy=0.0, pitch=-18.0, roll=0.0, now=t + 1.0)
     assert ("scroll", -3) in actions
     assert any("HEAD NOD" in b for b in badges)
+
+
+def test_unified_gesture_engine_nfs_gaming_profile():
+    actions = []
+    badges = []
+    engine = UnifiedGestureEngine(
+        on_action=lambda act, val: actions.append((act, val)),
+        on_badge=lambda b: badges.append(b),
+    )
+
+    engine.set_profile("nfs")
+    assert engine.profile == "nfs"
+
+    t = 500.0
+
+    # 1. Acceleration ('w'): Jaw Clench (CH1 Left Temple or CH2 Right Temple)
+    # Start clench
+    engine.feed_somatic([0.8, 0.1, 0.1, 0.0], now=t)
+    assert ("key_down", "w") in actions
+    assert any("GAS" in b for b in badges)
+
+    # Release clench
+    actions.clear()
+    engine.feed_somatic([0.0, 0.1, 0.1, 0.0], now=t + 0.2)
+    assert ("key_up", "w") in actions
+
+    # 2. Brake ('s'): Forehead / Brow Raise (CH3)
+    actions.clear()
+    engine.feed_somatic([0.1, 0.1, 0.7, 0.0], now=t + 0.4)
+    assert ("key_down", "s") in actions
+    assert any("BRAKE" in b for b in badges)
+
+    # Release brow
+    actions.clear()
+    engine.feed_somatic([0.1, 0.1, 0.0, 0.0], now=t + 0.6)
+    assert ("key_up", "s") in actions
+
+    # 3. Steer Left ('a'): Left Eye Wink
+    actions.clear()
+    engine.feed_optical(left_ear=0.10, right_ear=0.30, now=t + 0.8)
+    assert ("key_down", "a") in actions
+    assert any("STEER LEFT" in b for b in badges)
+
+    # Open eye
+    actions.clear()
+    engine.feed_optical(left_ear=0.30, right_ear=0.30, now=t + 1.0)
+    assert ("key_up", "a") in actions
+
+    # 4. Steer Right ('d'): Right Eye Wink
+    actions.clear()
+    engine.feed_optical(left_ear=0.30, right_ear=0.10, now=t + 1.2)
+    assert ("key_down", "d") in actions
+    assert any("STEER RIGHT" in b for b in badges)
+
+    # Open eye
+    actions.clear()
+    engine.feed_optical(left_ear=0.30, right_ear=0.30, now=t + 1.4)
+    assert ("key_up", "d") in actions
+
+    # 5. Handbrake ('space'): Smile
+    actions.clear()
+    engine.feed_optical(smile=0.60, now=t + 1.6)
+    assert ("key_down", "space") in actions
+    assert any("HANDBRAKE" in b for b in badges)
+
+    # Release smile
+    actions.clear()
+    engine.feed_optical(smile=0.0, now=t + 1.8)
+    assert ("key_up", "space") in actions
+
+    # 6. MPU Inactivity: feed_imu does NOT inject actions or move cursor
+    actions.clear()
+    engine.feed_imu(dx=50.0, dy=-50.0, pitch=-30.0, roll=20.0, now=t + 2.0)
+    assert len(actions) == 0  # Completely muted in NFS mode!
+
+    # 7. Switching back to desktop profile cleanly resets any held keys
+    engine.feed_somatic([0.8, 0.1, 0.1, 0.0], now=t + 2.2)  # Gas held down
+    assert ("key_down", "w") in actions
+    actions.clear()
+    engine.set_profile("desktop")
+    assert ("key_up", "w") in actions
+    assert engine.profile == "desktop"

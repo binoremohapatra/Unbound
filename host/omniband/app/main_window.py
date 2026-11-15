@@ -134,6 +134,7 @@ class MainWindow(QMainWindow):
         self.invert_mpu_x: bool = True
         self.invert_mpu_y: bool = True
         self.swap_mpu_xy: bool = False
+        self.nfs_mode: bool = False
         self._load_mpu_config()
 
         self._badge_revert_timer = QTimer(self)
@@ -724,6 +725,28 @@ class MainWindow(QMainWindow):
         mpu_ctrl_row.addStretch()
         layout.addLayout(mpu_ctrl_row)
 
+        # Gaming Profile Row: NFS Most Wanted / Racing Controls
+        gaming_profile_row = QHBoxLayout()
+        gaming_profile_row.setSpacing(10)
+        self._btn_nfs_mode = QPushButton("🏎️ GAMING PROFILE: DESKTOP MOUSE (Click to switch to NFS Most Wanted)")
+        self._btn_nfs_mode.setFont(QFont("Segoe UI", 9, QFont.Weight.Bold))
+        self._btn_nfs_mode.setStyleSheet(f"""
+            QPushButton {{
+                background-color: {SURFACE_1};
+                color: #00E5FF;
+                border: 1px solid #00E5FF;
+                border-radius: 4px;
+                padding: 6px 14px;
+            }}
+            QPushButton:hover {{
+                background-color: #003344;
+            }}
+        """)
+        self._btn_nfs_mode.clicked.connect(self._toggle_nfs_mode)
+        gaming_profile_row.addWidget(self._btn_nfs_mode)
+        gaming_profile_row.addStretch()
+        layout.addLayout(gaming_profile_row)
+
         # Calibration Matrix Displays (from self.calib)
         matrix_box = QVBoxLayout()
         matrix_box.setSpacing(4)
@@ -861,6 +884,8 @@ class MainWindow(QMainWindow):
 
     def _on_cursor_tick(self) -> None:
         """Consistent 60 FPS delta-velocity cursor integration loop."""
+        if getattr(self, "nfs_mode", False):
+            return  # Optical cursor disabled in NFS gaming mode!
         if not self.webcam_tracker.head_mouse_enabled:
             return
 
@@ -978,6 +1003,8 @@ class MainWindow(QMainWindow):
             self._active_scroll_pitch = 0.0
 
     def _on_scroll_60hz_tick(self) -> None:
+        if getattr(self, "nfs_mode", False):
+            return  # Optical pitch scrolling disabled in NFS gaming mode!
         if self._active_scroll_pitch == 0.0:
             return
         deg = self._active_scroll_pitch
@@ -1264,7 +1291,9 @@ class MainWindow(QMainWindow):
 
         proc = get_active_process_win32()
         exe_lower = proc.exe_name.lower()
-        is_racing_game = any(g in exe_lower for g in ["cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"])
+        is_racing_game = getattr(self, "nfs_mode", False) or any(
+            g in exe_lower for g in ["speed.exe", "speed2.exe", "nfs.exe", "nfsmw.exe", "needforspeed.exe", "cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"]
+        )
 
         if ch in (1, 2) and not is_racing_game:
             return
@@ -1305,7 +1334,9 @@ class MainWindow(QMainWindow):
 
         proc = get_active_process_win32()
         exe_lower = proc.exe_name.lower()
-        is_racing_game = any(g in exe_lower for g in ["cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"])
+        is_racing_game = getattr(self, "nfs_mode", False) or any(
+            g in exe_lower for g in ["speed.exe", "speed2.exe", "nfs.exe", "nfsmw.exe", "needforspeed.exe", "cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"]
+        )
 
         from core.events import OutputCommand
         cmds = []
@@ -1553,6 +1584,58 @@ class MainWindow(QMainWindow):
         self._save_mpu_config()
         self.calib.append_log(f"MPU Inversion updated: InvX={self.invert_mpu_x}, InvY={self.invert_mpu_y}, SwapXY={self.swap_mpu_xy}")
 
+    def _toggle_nfs_mode(self) -> None:
+        """Toggle between Desktop Mouse Navigation and NFS Most Wanted Gaming Mode."""
+        self.nfs_mode = not getattr(self, "nfs_mode", False)
+        if self.nfs_mode:
+            if hasattr(self, "wifi_client"):
+                self.wifi_client.gesture_engine.set_profile("nfs")
+            self._btn_nfs_mode.setText("🏎️ GAMING PROFILE: NFS MOST WANTED (W=Gas, S=Brake, A=Left, D=Right, SPACE=Handbrake) [ACTIVE]")
+            self._btn_nfs_mode.setStyleSheet("""
+                QPushButton {
+                    background-color: #3b1100;
+                    color: #FF6600;
+                    border: 2px solid #FF6600;
+                    border-radius: 4px;
+                    padding: 6px 14px;
+                    font-weight: bold;
+                }
+                QPushButton:hover {
+                    background-color: #551a00;
+                }
+            """)
+            if hasattr(self, "_lbl_hw_mpu_pill"):
+                self._lbl_hw_mpu_pill.setText("MPU Motion: MUTED (NFS Mode Active)")
+                self._lbl_hw_mpu_pill.setStyleSheet("background: #2a1100; color: #FF6600; font-weight: bold; padding: 3px 6px; border-radius: 3px; border: 1px solid #FF6600;")
+            if hasattr(self, "_lbl_active_gesture_badge"):
+                self._lbl_active_gesture_badge.setText("🏎️ [NFS] READY — Clench Jaw for Gas (W)")
+            self.status.showMessage("🏎️ NFS Most Wanted Gaming Mode ACTIVATED! MPU cursor muted.", 5000)
+            self.calib.append_log("🏎️ PROFILE ACTIVATED: NFS Most Wanted (W=Gas, S=Brake, A=Left, D=Right, SPACE=Handbrake, MPU=OFF)")
+        else:
+            if hasattr(self, "wifi_client"):
+                self.wifi_client.gesture_engine.set_profile("desktop")
+            self.gw.release_all("NFS Mode Deactivated")
+            self._btn_nfs_mode.setText("🏎️ GAMING PROFILE: DESKTOP MOUSE (Click to switch to NFS Most Wanted)")
+            self._btn_nfs_mode.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {SURFACE_1};
+                    color: #00E5FF;
+                    border: 1px solid #00E5FF;
+                    border-radius: 4px;
+                    padding: 6px 14px;
+                }}
+                QPushButton:hover {{
+                    background-color: #003344;
+                }}
+            """)
+            if hasattr(self, "_lbl_hw_mpu_pill"):
+                self._lbl_hw_mpu_pill.setText("MPU6050 Motion: Ready (Hardware Priority)")
+                self._lbl_hw_mpu_pill.setStyleSheet("background: #111; color: #00E5FF; padding: 3px 6px; border-radius: 3px; border: 1px solid #333;")
+            if hasattr(self, "_lbl_active_gesture_badge"):
+                self._lbl_active_gesture_badge.setText("⚡ GESTURE: READY")
+            self.status.showMessage("🖥️ Desktop Mouse Mode Restored.", 3000)
+            self.calib.append_log("🖥️ PROFILE ACTIVATED: Desktop Mouse Mode Restored")
+
     def _revert_gesture_badge(self) -> None:
         if hasattr(self, "_lbl_active_gesture_badge"):
             self._lbl_active_gesture_badge.setText("⚡ GESTURE: READY")
@@ -1610,7 +1693,22 @@ class MainWindow(QMainWindow):
             ))
             self.calib.append_log(f"⚡ [GESTURE ENGINE] Key: {key_name.upper()} (Enter/Confirm)")
 
+        elif action_type == "key_down":
+            key_name = str(param)
+            self.gw.apply([OutputCommand(kind="key", name=key_name, pressed=True)])
+            self.gw.flush(now)
+            self.calib.append_log(f"🏎️ [NFS GAMING] Key DOWN: {key_name.upper()}")
+
+        elif action_type == "key_up":
+            key_name = str(param)
+            self.gw.apply([OutputCommand(kind="key", name=key_name, pressed=False)])
+            self.gw.flush(now)
+            self.calib.append_log(f"🏎️ [NFS GAMING] Key UP: {key_name.upper()}")
+
     def _on_imu_motion_event(self, dx: float, dy: float) -> None:
+        if getattr(self, "nfs_mode", False) or (hasattr(self, "wifi_client") and getattr(self.wifi_client.gesture_engine, "profile", "desktop") == "nfs"):
+            return  # MPU motion muted in NFS Gaming Mode!
+
         if getattr(self, "swap_mpu_xy", False):
             dx, dy = dy, dx
         if getattr(self, "invert_mpu_x", True):

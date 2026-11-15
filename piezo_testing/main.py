@@ -73,6 +73,15 @@ def main() -> None:
     if app is None:
         app = QApplication(sys.argv)
 
+    import signal
+    from PySide6.QtCore import QTimer
+
+    signal.signal(signal.SIGINT, lambda sig, frame: app.quit())
+    # Keep Python interpreter active to process SIGINT signals
+    sig_timer = QTimer()
+    sig_timer.start(200)
+    sig_timer.timeout.connect(lambda: None)
+
     dashboard = LivePiezoDashboard()
 
     if args.port:

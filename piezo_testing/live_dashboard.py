@@ -376,7 +376,7 @@ class LivePiezoDashboard(QMainWindow):
             p.showGrid(x=True, y=True, alpha=0.25)
             p.setYRange(0, 4095, padding=0.05)
             p.setMouseEnabled(x=False, y=False)
-            curve = p.plot(pen=pg.mkPen(color=info.qcolor, width=1.8))
+            curve = p.plot(pen=pg.mkPen(color=info.qcolor, width=1.8), clipToView=True)
             self.plots[idx] = p
             self.curves[idx] = curve
 
@@ -534,18 +534,20 @@ class LivePiezoDashboard(QMainWindow):
         for idx in range(4):
             self.channel_cards[idx].update_stats(self.stats_analyzer.channels[idx])
 
-        # Update Rolling Graphs
+        # Update Rolling Graphs only when data exists or new samples were processed
         cutoff_t = rel_now - self.current_window_sec
-        for idx in range(4):
-            if self.curves[idx].isVisible():
-                t_arr = self.time_buffers[idx]
-                v_arr = self.val_buffers[idx]
-                if len(t_arr) > 0:
-                    self.curves[idx].setData(list(t_arr), list(v_arr))
+        has_data = any(len(self.time_buffers[i]) > 0 for i in range(4))
+        if has_data and samples_processed > 0:
+            for idx in range(4):
+                if self.curves[idx].isVisible():
+                    t_arr = self.time_buffers[idx]
+                    v_arr = self.val_buffers[idx]
+                    if len(t_arr) > 0:
+                        self.curves[idx].setData(list(t_arr), list(v_arr))
 
-        # Adjust X-Axis Range
-        if self.plots:
-            self.plots[0].setXRange(cutoff_t, rel_now, padding=0.01)
+            # Adjust X-Axis Range
+            if self.plots:
+                self.plots[0].setXRange(cutoff_t, rel_now, padding=0.01)
 
         # Update Recording Status Pill
         if self.data_logger.is_recording:

@@ -536,11 +536,15 @@ class Gateway:
             self._sync_locked()
 
     def move_cursor_relative(self, dx: int | float, dy: int | float) -> None:
-        """Inject relative cursor motion directly via backend."""
-        idx = int(round(dx))
-        idy = int(round(dy))
-        if idx or idy:
-            with self._lock:
+        """Inject relative cursor motion directly via backend with sub-pixel remainder accumulation."""
+        with self._lock:
+            self._rem[0] += float(dx)
+            self._rem[1] += float(dy)
+            idx = int(self._rem[0])
+            idy = int(self._rem[1])
+            if idx or idy:
+                self._rem[0] -= idx
+                self._rem[1] -= idy
                 if hasattr(self.backend, "mouse_move"):
                     self.backend.mouse_move(idx, idy)
                 if hasattr(self.backend, "commit"):

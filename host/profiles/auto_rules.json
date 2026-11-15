@@ -11,6 +11,16 @@
       "tts_announcement": "Cyberpunk profile active"
     },
     {
+      "name": "NFS Most Wanted / Racing",
+      "executables": ["speed.exe", "speed2.exe", "nfs13.exe", "nfs.exe", "NeedForSpeedMostWanted.exe"],
+      "title_keywords": ["Most Wanted", "Need for Speed", "NFS"],
+      "mode": 2,
+      "profile": "racing_nfs_most_wanted.json",
+      "show_hud": true,
+      "badge": "MOD ACTIVE: NFS MOST WANTED",
+      "tts_announcement": "NFS Most Wanted profile active, MPU cursor muted"
+    },
+    {
       "name": "Forza Motorsport / Horizon",
       "executables": ["ForzaHorizon5.exe", "forza_gaming.desktop.x64_release_final.exe", "ForzaMotorsport.exe"],
       "title_keywords": ["Forza Horizon", "Forza Motorsport"],

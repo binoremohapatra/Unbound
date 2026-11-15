@@ -309,4 +309,5 @@ def test_main_window_prune_card_integration(qapp, monkeypatch):
     assert win.prune_engine.blocked_threats > prev_threats
     assert "BLOCKED BY PRUNE FIREWALL" in win._lbl_prune_output.text()
 
+    win.stop()
     win.close()

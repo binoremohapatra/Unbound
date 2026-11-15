@@ -227,6 +227,8 @@ def test_main_window_camera_controls_and_120hz_loop(qapp, monkeypatch):
     # Test biometric click
     win._on_biometric_click()
     assert win.reticle.state == "CLICKED"
+    win.stop()
+    win.close()
 
 def test_zero_click_auto_baseline_and_latch_mechanism():
     """Verify zero-click auto-enable on launch, latch locking, and opposite-eye unlocking."""

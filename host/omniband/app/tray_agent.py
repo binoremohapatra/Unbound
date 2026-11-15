@@ -38,9 +38,6 @@ class SystemTrayAgent(QSystemTrayIcon):
         act_show = menu.addAction("Command Center Window")
         act_show.triggered.connect(self.sig_toggle_main_window.emit)
 
-        act_hud = menu.addAction("Toggle Tactical HUD Overlay")
-        act_hud.triggered.connect(self.sig_toggle_hud.emit)
-
         menu.addSeparator()
 
         # Startup toggle
@@ -76,11 +73,6 @@ class SystemTrayAgent(QSystemTrayIcon):
         for level in ("OFF", "LANE-CENTERING", "FULL"):
             act = copilot_menu.addAction(f"Assist: {level}")
             act.triggered.connect(lambda _, lvl=level: self.sig_assist_selected.emit(lvl))
-
-        menu.addSeparator()
-
-        act_rel = menu.addAction("⚠️ Emergency Release All Keys")
-        act_rel.triggered.connect(self.sig_release_all.emit)
 
         menu.addSeparator()
 

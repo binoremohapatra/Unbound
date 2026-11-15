@@ -1,0 +1,128 @@
+{
+  "_comment": "OmniControl OS master config. Hot-reloadable: the HUD watches this file and applies changes without restart. All times are milliseconds, angles degrees, distances normalized 0..1 unless noted.",
+
+  "loop": {
+    "hz": 60,
+    "telemetry_hz": 4,
+    "watchdog_ms": 250
+  },
+
+  "safety": {
+    "face_lost_ms": 300,
+    "face_present_ms": 300,
+    "panic_key_hold_max_ms": 10000,
+    "calibrate_double_blink_ms": 1000,
+    "latch_hold_ms": 3000,
+    "latch_keys": ["lalt"],
+    "converse_lock_release_phrase": "freeze",
+    "converse_lock_resume_phrases": ["resume", "continue"]
+  },
+
+  "vision": {
+    "camera_id": 0,
+    "width": 640,
+    "height": 480,
+    "fps": 60,
+    "clahe_clip": 2.0,
+    "clahe_grid": 8,
+    "blink_on": 0.58,
+    "blink_off": 0.35,
+    "blink_min_ms": 230,
+    "eye_closed_max": 0.35,
+    "clench_jaw_max": 0.08,
+    "clench_min_ms": 350,
+    "gaze_dwell_ms": 380,
+    "iris_left_idx": 468,
+    "iris_right_idx": 473,
+    "eye_left_idx": [33, 133],
+    "eye_right_idx": [362, 263],
+    "nose_idx": 1
+  },
+
+  "filters": {
+    "head_yaw":   { "min_cutoff": 1.0, "beta": 0.007, "d_cutoff": 1.0 },
+    "head_pitch": { "min_cutoff": 1.0, "beta": 0.007, "d_cutoff": 1.0 },
+    "gaze_x":     { "min_cutoff": 1.2, "beta": 0.010, "d_cutoff": 1.0 },
+    "gaze_y":     { "min_cutoff": 1.2, "beta": 0.010, "d_cutoff": 1.0 }
+  },
+
+  "aim": {
+    "deadzone": 0.06,
+    "curve": "cubic",
+    "full_scale_deg": 25.0,
+    "mouse_speed_px_per_s": 1400.0,
+    "schmitt_on": 0.55,
+    "schmitt_off": 0.33,
+    "glasses_fallback_ms": 800
+  },
+
+  "axes": {
+    "_comment": "gaze -> mouse. right_x/right_y are the names central_fsm emits; type=mouse moves the pointer, type=keys would Schmitt-trigger key pairs instead.",
+    "right_x": { "type": "mouse", "axis": "x", "speed": 1400.0, "invert": false },
+    "right_y": { "type": "mouse", "axis": "y", "speed": 1400.0, "invert": true }
+  },
+
+  "workstation": {
+    "_comment": "5-slot predictive completion words cycled by gaze dwell in ACTIVE_WORKSTATION; unicode_inject types the selected word via KEYEVENTF_UNICODE.",
+    "words": ["the ", "and ", "ing", "tion", "to ", "you ", "for ", "that ", "with ", "have "],
+    "unicode_inject": true
+  },
+
+  "audio": {
+    "sample_rate": 16000,
+    "block_size": 512,
+    "click_band_hz": [2500, 6000],
+    "click_threshold": 6.0,
+    "click_min_interval_ms": 120,
+    "vosk_model": "models/vosk-model-small-en-us-0.15",
+    "vosk_grammar": ["freeze", "resume", "continue", "stop", "click"]
+  },
+
+  "omnibus": {
+    "serial_baud": 115200,
+    "serial_json_keys": ["piezo_raw", "pulse", "clench", "lat_ms"],
+    "hardware_clench_threshold": 0.6,
+    "serial_stale_ms": 500,
+    "scan_ports": true
+  },
+
+  "window_profiles": {
+    "esports_3d": {
+      "match": ["gta", "cyberpunk", "elden", "witcher", "red dead", "apex", "valorant", "cs2", "counter-strike", "dota", "overwatch", "fortnite", "minecraft"],
+      "mode": "ACTIVE_ESPORTS",
+      "stick_axis": "right",
+      "fire_button": "left",
+      "ads_button": "right"
+    },
+    "workstation_2d": {
+      "match": ["word", "winword", "notepad", "code", "devenv", "visual studio", "chrome", "msedge", "firefox", "explorer", "teams", "slack", "outlook"],
+      "mode": "ACTIVE_WORKSTATION",
+      "predictive_slots": 5,
+      "unicode_inject": true
+    }
+  },
+
+  "scancodes": {
+    "_comment": "name -> [set1 scancode, extended]. Same table the gateway uses; F13-F24 added for OmniControl-only bindings that no game uses.",
+    "esc": [1, false], "tab": [15, false], "enter": [28, false], "space": [57, false],
+    "backspace": [14, false], "shift": [42, false], "ctrl": [29, false], "alt": [56, false],
+    "up": [72, true], "down": [80, true], "left": [75, true], "right": [77, true],
+    "home": [71, true], "end": [79, true], "pgup": [73, true], "pgdn": [81, true],
+    "insert": [82, true], "delete": [83, true], "capslock": [58, false],
+    "f1": [59, false], "f2": [60, false], "f3": [61, false], "f4": [62, false],
+    "f5": [63, false], "f6": [64, false], "f7": [65, false], "f8": [66, false],
+    "f9": [67, false], "f10": [68, false], "f11": [87, false], "f12": [88, false],
+    "f13": [100, false], "f14": [101, false], "f15": [102, false], "f16": [103, false],
+    "f17": [104, false], "f18": [105, false], "f19": [106, false], "f20": [107, false],
+    "f21": [108, false], "f22": [109, false], "f23": [110, false], "f24": [118, false],
+    "lshift": [42, false], "rshift": [54, false], "lctrl": [29, false], "rctrl": [157, true],
+    "lalt": [56, false], "ralt": [184, true], "lwin": [91, true], "apps": [93, true]
+  },
+
+  "mouse_buttons": {
+    "_comment": "name -> [button-down flag, button-up flag] for MOUSEINPUT.dwFlags",
+    "left": [2, 4],
+    "right": [8, 16],
+    "middle": [32, 64]
+  }
+}

@@ -315,10 +315,18 @@ class FrameSource:
         backend = cv2.CAP_DSHOW if sys.platform == "win32" else cv2.CAP_ANY
         cap = cv2.VideoCapture(self.camera_id, backend)
         if not cap.isOpened():
+            try:
+                cap.release()
+            except Exception:
+                pass
             cap = cv2.VideoCapture(self.camera_id)
 
         if not cap.isOpened():
             log.warning("FrameSource: could not open camera index %d", self.camera_id)
+            try:
+                cap.release()
+            except Exception:
+                pass
             self._running = False
             return
 

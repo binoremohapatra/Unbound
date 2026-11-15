@@ -91,8 +91,10 @@ void MpuFront::read(float &dx, float &dy, float &pitch, float &roll) {
         float gz = (float)rawZ - gyro_bias_z_;
         float gx = (float)rawX - gyro_bias_x_;
 
-        const float DEADZONE = 220.0f;
-        const float SENSITIVITY = 175.0f;
+        // DEADZONE: ignore micro-tremors. SENSITIVITY: higher = slower/smoother cursor.
+        // Increased from 175 → 350 to prevent violent/jumpy movement on real hardware.
+        const float DEADZONE = 280.0f;
+        const float SENSITIVITY = 350.0f;
 
         if (abs(gz) > DEADZONE) {
             float excess = (gz > 0) ? (gz - DEADZONE) : (gz + DEADZONE);

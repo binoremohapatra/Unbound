@@ -1,4 +1,11 @@
 // adc_front.cpp
+// ─── CHANNEL PHYSICAL LAYOUT ───────────────────────────────────────────────
+//  CH1 (index 0 / GPIO 32 / ADC1) → LEFT  side muscle → Scroll UP
+//  CH2 (index 1 / GPIO 34 / ADC1) → RIGHT side muscle → Scroll DOWN
+//  CH3 (index 2 / GPIO 33 / ADC1) → FOREHEAD (primary jaw/clench) → Click / Hold
+//  CH4 (index 3 / GPIO 26 / ADC2) → DISABLED while Wi-Fi is active;
+//                                    kept as digital-spike fallback only
+// ───────────────────────────────────────────────────────────────────────────
 #include "adc_front.h"
 #include "constants_gen.h"
 #include "hw_config.h"
@@ -108,9 +115,10 @@ int32_t AdcFront::read(int ch) {
     }
     if (out_val > 4095) out_val = 4095;
 
-    // Cache CH1 for temporalis cross-coupling
-    if (ch == 0) {
-        ch1_last_envelope_ = out_val;
+    // Cache CH3 (forehead/primary) envelope for CH4 digital-spike cross-coupling.
+    // CH3 is the new primary jaw-clench channel; coupling to CH4 fallback still valid.
+    if (ch == 2) {
+        ch1_last_envelope_ = out_val;  // variable reused — represents "primary channel envelope"
     }
 
     last_us_ = micros() - t0;

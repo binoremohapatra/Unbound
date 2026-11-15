@@ -6,16 +6,20 @@
 namespace omniband {
 namespace hw {
 
-// ─── CHANNEL PHYSICAL LAYOUT (updated) ─────────────────────────────────────
-// CH1 (GPIO 32 / ADC1_CH4) → LEFT side muscle   → Scroll UP
-// CH2 (GPIO 34 / ADC1_CH6) → RIGHT side muscle  → Scroll DOWN
-// CH3 (GPIO 33 / ADC1_CH5) → FOREHEAD (primary) → Jaw Clench / Click / Hold
+// ─── CHANNEL PHYSICAL LAYOUT (anatomically correct) ────────────────────────
+// CH1 (GPIO 32 / ADC1_CH4) → LEFT TEMPLE  (Temporalis muscle) → Jaw Clench
+// CH2 (GPIO 34 / ADC1_CH6) → RIGHT TEMPLE (Temporalis muscle) → Secondary
+// CH3 (GPIO 33 / ADC1_CH5) → FOREHEAD     (Frontalis muscle)  → Eyebrow Raise
 // CH4 (GPIO 26 / ADC2_CH9) → DISABLED: ADC2 unusable while Wi-Fi is active
+//
+// Anatomy note:
+//   Jaw clench fires the TEMPORALIS (temple) muscle — NOT the forehead.
+//   Eyebrow raise fires the FRONTALIS (forehead) muscle.
 // ─────────────────────────────────────────────────────────────────────────────
-constexpr int PIN_CH1 = 32; // LEFT side muscle  (ADC1_CH4) — Scroll UP
-constexpr int PIN_CH2 = 34; // RIGHT side muscle (ADC1_CH6) — Scroll DOWN
-constexpr int PIN_CH3 = 33; // FOREHEAD primary  (ADC1_CH5) — Jaw Clench / Click
-constexpr int PIN_CH4 = 26; // DISABLED          (ADC2_CH9) — Wi-Fi conflict, digital-only fallback
+constexpr int PIN_CH1 = 32; // LEFT TEMPLE  (ADC1_CH4) — Temporalis → Jaw Clench
+constexpr int PIN_CH2 = 34; // RIGHT TEMPLE (ADC1_CH6) — Temporalis → Secondary
+constexpr int PIN_CH3 = 33; // FOREHEAD     (ADC1_CH5) — Frontalis  → Eyebrow Raise
+constexpr int PIN_CH4 = 26; // DISABLED     (ADC2_CH9) — Wi-Fi conflict, digital-only fallback
 
 // I2C MPU6050 & OLED (SSD1306 128x64)
 constexpr int PIN_I2C_SDA = 21;

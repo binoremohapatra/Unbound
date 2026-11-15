@@ -208,25 +208,28 @@ class UnifiedGestureEngine:
                 return
 
             c = [float(x) / 4095.0 if float(x) > 1.0 else float(x) for x in channels]
-            # ─── CHANNEL REMAPPING ───────────────────────────────────────────────────
-            # CH4 (GPIO 26 / ADC2) is permanently disabled when Wi-Fi is active.
-            # New physical layout on headband:
-            #   CH3 (GPIO 33 / ADC1) → FOREHEAD  → primary jaw/clench trigger
-            #   CH1 (GPIO 32 / ADC1) → LEFT side  → scroll UP / left gesture
-            #   CH2 (GPIO 34 / ADC1) → RIGHT side → scroll DOWN / right gesture
-            #   CH4                  → IGNORED
+            # ─── CHANNEL MAPPING (anatomically correct) ──────────────────────────────
+            # CH1 (index 0 / GPIO 32 / ADC1) → LEFT TEMPLE  (Temporalis) → JAW CLENCH
+            # CH2 (index 1 / GPIO 34 / ADC1) → RIGHT TEMPLE (Temporalis) → secondary
+            # CH3 (index 2 / GPIO 33 / ADC1) → FOREHEAD     (Frontalis)  → BROW RAISE
+            # CH4 (index 3)                  → DISABLED (ADC2 / Wi-Fi conflict)
+            #
+            # Anatomy:
+            #   Jaw clench fires TEMPORALIS (temple) — not forehead.
+            #   Eyebrow raise fires FRONTALIS (forehead).
             # ─────────────────────────────────────────────────────────────────────────
-            ch_left     = c[0]  # CH1 — left-side muscle
-            ch_right    = c[1]  # CH2 — right-side muscle
-            ch_forehead = c[2]  # CH3 — forehead / jaw clench (PRIMARY)
+            ch_temple_l  = c[0]  # CH1 — LEFT temple (primary jaw clench via temporalis)
+            ch_temple_r  = c[1]  # CH2 — RIGHT temple (secondary / double-side clench)
+            ch_forehead  = c[2]  # CH3 — Forehead (eyebrow raise → scroll up)
             # c[3] = CH4 → not used
 
-            # 1. JAW CLENCH — driven by CH3 (forehead)
+            # 1. JAW CLENCH — driven by CH1 (left temple / temporalis)
+            # Both temples fire together on jaw clench, so OR with CH2 for redundancy.
             # Single tap  → Left Click
             # Double tap  → Right Click
             # Hold >450ms → Drag Lock (mouse_down) / release → mouse_up
-            JAW_THRESH = 0.25   # tune: lower = more sensitive, higher = less false triggers
-            jaw_is_high = ch_forehead > JAW_THRESH
+            JAW_THRESH = 0.25   # tune on real hardware: lower = more sensitive
+            jaw_is_high = (ch_temple_l > JAW_THRESH) or (ch_temple_r > JAW_THRESH)
 
             if jaw_is_high and not self._jaw_active:
                 self._jaw_active = True
@@ -261,19 +264,12 @@ class UnifiedGestureEngine:
                         self._single_tap_pending = True
                         self._single_tap_deadline = now + 0.300
 
-            # 2. LEFT MUSCLE (CH1) → Scroll UP
-            # Cooldown 180ms to avoid repeat flooding
-            SIDE_THRESH = 0.25
-            if ch_left > SIDE_THRESH:
+            # 2. EYEBROW RAISE — driven by CH3 (forehead / frontalis) → Scroll UP
+            BROW_THRESH = 0.25
+            if ch_forehead > BROW_THRESH:
                 if now - self._last_brow_t >= 0.180:
                     self._last_brow_t = now
-                    self.trigger_action("scroll", 3, "⬆️ LEFT MUSCLE → SCROLL UP")
-
-            # 3. RIGHT MUSCLE (CH2) → Scroll DOWN
-            if ch_right > SIDE_THRESH:
-                if now - self._last_nod_t >= 0.180:
-                    self._last_nod_t = now
-                    self.trigger_action("scroll", -3, "⬇️ RIGHT MUSCLE → SCROLL DOWN")
+                    self.trigger_action("scroll", 3, "⬆️ BROW RAISE (FOREHEAD) → SCROLL UP")
 
     def feed_imu(self, dx: float, dy: float, pitch: float = 0.0, roll: float = 0.0, now: Optional[float] = None) -> None:
         if now is None:

@@ -147,10 +147,13 @@ def test_unified_gesture_engine_jaw_clench_and_double_tap():
     )
 
     t0 = 100.0
+    # Channel layout: [CH1=left, CH2=right, CH3=forehead/jaw, CH4=disabled]
+    # Jaw clench fires on CH3 (index 2) > 0.25
+
     # 1. Single Jaw Clench spike (< 450ms, e.g. 50ms)
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t0)
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t0 + 0.05)
-    # Poll after timeout (0.3s)
+    engine.feed_somatic([0.1, 0.1, 0.8, 0.0], now=t0)        # CH3 high → jaw active
+    engine.feed_somatic([0.1, 0.1, 0.0, 0.0], now=t0 + 0.05) # CH3 low  → released
+    # Poll after timeout (0.3s) to flush single-tap pending
     engine.poll(now=t0 + 0.35)
     assert ("click", "left") in actions
     assert any("JAW CLENCH" in b for b in badges)
@@ -159,12 +162,12 @@ def test_unified_gesture_engine_jaw_clench_and_double_tap():
     actions.clear()
     badges.clear()
     t1 = 200.0
-    # First spike
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t1)
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t1 + 0.04)
-    # Second spike at 150ms later
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t1 + 0.15)
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t1 + 0.19)
+    # First spike on CH3
+    engine.feed_somatic([0.1, 0.1, 0.8, 0.0], now=t1)
+    engine.feed_somatic([0.1, 0.1, 0.0, 0.0], now=t1 + 0.04)
+    # Second spike at 150ms later (within 450ms window)
+    engine.feed_somatic([0.1, 0.1, 0.8, 0.0], now=t1 + 0.15)
+    engine.feed_somatic([0.1, 0.1, 0.0, 0.0], now=t1 + 0.19)
 
     assert ("click", "right") in actions
     assert any("DOUBLE-TAP" in b for b in badges)
@@ -179,15 +182,15 @@ def test_unified_gesture_engine_jaw_hold_and_release():
     )
 
     t0 = 300.0
-    # Start clench
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t0)
-    # Clench sustained beyond 450ms
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.8], now=t0 + 0.46)
+    # Start clench on CH3 (forehead)
+    engine.feed_somatic([0.1, 0.1, 0.8, 0.0], now=t0)
+    # Clench sustained beyond 450ms → drag lock fires
+    engine.feed_somatic([0.1, 0.1, 0.8, 0.0], now=t0 + 0.46)
     assert ("mouse_down", "left") in actions
     assert any("DRAGGING" in b for b in badges)
 
     # Release clench
-    engine.feed_somatic([0.1, 0.1, 0.1, 0.0], now=t0 + 0.60)
+    engine.feed_somatic([0.1, 0.1, 0.0, 0.0], now=t0 + 0.60)
     assert ("mouse_up", "left") in actions
     assert any("DROPPED" in b for b in badges)
 
@@ -222,12 +225,13 @@ def test_unified_gesture_engine_optical_and_imu_gestures():
     assert ("key", "enter") in actions
     assert any("SMILE" in b for b in badges)
 
-    # 4. Eyebrow Raise (CH2+CH3) -> Scroll UP (dy=+3)
+    # 4. LEFT MUSCLE (CH1 / index 0) → Scroll UP (dy=+3)
     actions.clear()
     badges.clear()
-    engine.feed_somatic([0.1, 0.6, 0.6, 0.1], now=t + 0.8)
+    # CH1 high → scroll up. CH3 must stay low to avoid jaw clench.
+    engine.feed_somatic([0.6, 0.1, 0.0, 0.0], now=t + 0.8)
     assert ("scroll", 3) in actions
-    assert any("BROW RAISE" in b for b in badges)
+    assert any("SCROLL UP" in b for b in badges)
 
     # 5. Head Nod (MPU Pitch Down) -> Scroll DOWN (dy=-3)
     actions.clear()

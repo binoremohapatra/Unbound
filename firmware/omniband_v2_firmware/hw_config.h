@@ -6,11 +6,16 @@
 namespace omniband {
 namespace hw {
 
-// Pin mapping (ESP32 DevKit 30-pin, matching your physical wiring)
-constexpr int PIN_CH1 = 32; // Left temple (ADC1_CH4)
-constexpr int PIN_CH2 = 34; // Centre-left forehead (ADC1_CH6 - input only)
-constexpr int PIN_CH3 = 33; // Centre-right forehead (ADC1_CH5)
-constexpr int PIN_CH4 = 26; // Right temple / molar clench (ADC2_CH9 - Jaw Clench)
+// ─── CHANNEL PHYSICAL LAYOUT (updated) ─────────────────────────────────────
+// CH1 (GPIO 32 / ADC1_CH4) → LEFT side muscle   → Scroll UP
+// CH2 (GPIO 34 / ADC1_CH6) → RIGHT side muscle  → Scroll DOWN
+// CH3 (GPIO 33 / ADC1_CH5) → FOREHEAD (primary) → Jaw Clench / Click / Hold
+// CH4 (GPIO 26 / ADC2_CH9) → DISABLED: ADC2 unusable while Wi-Fi is active
+// ─────────────────────────────────────────────────────────────────────────────
+constexpr int PIN_CH1 = 32; // LEFT side muscle  (ADC1_CH4) — Scroll UP
+constexpr int PIN_CH2 = 34; // RIGHT side muscle (ADC1_CH6) — Scroll DOWN
+constexpr int PIN_CH3 = 33; // FOREHEAD primary  (ADC1_CH5) — Jaw Clench / Click
+constexpr int PIN_CH4 = 26; // DISABLED          (ADC2_CH9) — Wi-Fi conflict, digital-only fallback
 
 // I2C MPU6050 & OLED (SSD1306 128x64)
 constexpr int PIN_I2C_SDA = 21;

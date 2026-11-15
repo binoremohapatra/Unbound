@@ -550,16 +550,16 @@ class MainWindow(QMainWindow):
         pills_layout.setSpacing(6)
         pill_css = f"background: {SURFACE_2}; border: 1px solid {BORDER}; padding: 4px 6px; border-radius: 4px; font-family: 'Cascadia Code', monospace; font-size: 10px;"
 
-        self._pill_ch1 = QLabel("CH1 (Bite): 0.00")
+        self._pill_ch1 = QLabel("CH1 (LEFT): 0.00")
         self._pill_ch1.setStyleSheet(f"{pill_css} color: {BURNT_ORANGE}; font-weight: bold;")
 
-        self._pill_ch2 = QLabel("CH2 (L-Cheek): 0.00")
+        self._pill_ch2 = QLabel("CH2 (RIGHT): 0.00")
         self._pill_ch2.setStyleSheet(f"{pill_css} color: #a8ff78; font-weight: bold;")
 
-        self._pill_ch3 = QLabel("CH3 (R-Cheek): 0.00")
+        self._pill_ch3 = QLabel("CH3 (FOREHEAD/JAW): 0.00")
         self._pill_ch3.setStyleSheet(f"{pill_css} color: #ffcc00; font-weight: bold;")
 
-        self._pill_ch4 = QLabel("CH4 (Jaw): 0.00 [IDLE]")
+        self._pill_ch4 = QLabel("CH4 (DISABLED): ADC2/WiFi")
         self._pill_ch4.setStyleSheet(f"{pill_css} color: {STATUS_ERR}; font-weight: bold;")
 
         pills_layout.addWidget(self._pill_ch1)
@@ -1119,10 +1119,10 @@ class MainWindow(QMainWindow):
             if not hw_connected:
                 self.scope.push_sample(vals, active)
                 if hasattr(self, "_pill_ch1"):
-                    self._pill_ch1.setText(f"CH1 (Eye L): {vals[0]:.2f}")
-                    self._pill_ch2.setText(f"CH2 (Eye R): {vals[1]:.2f}")
-                    self._pill_ch3.setText(f"CH3 (Jaw): {vals[2]:.2f}")
-                    self._pill_ch4.setText(f"CH4 (Brow): {vals[3]:.2f}")
+                    self._pill_ch1.setText(f"CH1 (LEFT): {vals[0]:.2f}")
+                    self._pill_ch2.setText(f"CH2 (RIGHT): {vals[1]:.2f}")
+                    self._pill_ch3.setText(f"CH3 (JAW/CLENCH): {vals[2]:.2f}")
+                    self._pill_ch4.setText(f"CH4 (DISABLED): ADC2/WiFi")
         except Exception:
             pass
 

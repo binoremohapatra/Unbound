@@ -204,14 +204,29 @@ class UnifiedGestureEngine:
                 self._tap_count = 0
                 self.trigger_action("click", "left", "⚡ GESTURE: JAW CLENCH (LEFT CLICK)")
 
-            if len(channels) < 4:
+            if len(channels) < 3:
                 return
 
             c = [float(x) / 4095.0 if float(x) > 1.0 else float(x) for x in channels]
-            ch1, ch2, ch3, ch4 = c[0], c[1], c[2], c[3]
+            # ─── CHANNEL REMAPPING ───────────────────────────────────────────────────
+            # CH4 (GPIO 26 / ADC2) is permanently disabled when Wi-Fi is active.
+            # New physical layout on headband:
+            #   CH3 (GPIO 33 / ADC1) → FOREHEAD  → primary jaw/clench trigger
+            #   CH1 (GPIO 32 / ADC1) → LEFT side  → scroll UP / left gesture
+            #   CH2 (GPIO 34 / ADC1) → RIGHT side → scroll DOWN / right gesture
+            #   CH4                  → IGNORED
+            # ─────────────────────────────────────────────────────────────────────────
+            ch_left     = c[0]  # CH1 — left-side muscle
+            ch_right    = c[1]  # CH2 — right-side muscle
+            ch_forehead = c[2]  # CH3 — forehead / jaw clench (PRIMARY)
+            # c[3] = CH4 → not used
 
-            # 1. Jaw Clench Trigger logic (Masseter CH4 spike or strong CH1 temporalis)
-            jaw_is_high = (ch4 > 0.40) or (ch1 > 0.65)
+            # 1. JAW CLENCH — driven by CH3 (forehead)
+            # Single tap  → Left Click
+            # Double tap  → Right Click
+            # Hold >450ms → Drag Lock (mouse_down) / release → mouse_up
+            JAW_THRESH = 0.25   # tune: lower = more sensitive, higher = less false triggers
+            jaw_is_high = ch_forehead > JAW_THRESH
 
             if jaw_is_high and not self._jaw_active:
                 self._jaw_active = True
@@ -244,13 +259,21 @@ class UnifiedGestureEngine:
                         self._tap_count = 1
                         self._last_tap_t = now
                         self._single_tap_pending = True
-                        self._single_tap_deadline = now + 0.280
+                        self._single_tap_deadline = now + 0.300
 
-            # 2. Eyebrow Raise via Somatic CH2 + CH3
-            if ch2 > 0.42 and ch3 > 0.42:
-                if now - self._last_brow_t >= 0.120:
+            # 2. LEFT MUSCLE (CH1) → Scroll UP
+            # Cooldown 180ms to avoid repeat flooding
+            SIDE_THRESH = 0.25
+            if ch_left > SIDE_THRESH:
+                if now - self._last_brow_t >= 0.180:
                     self._last_brow_t = now
-                    self.trigger_action("scroll", 3, "⬆️ BROW RAISE")
+                    self.trigger_action("scroll", 3, "⬆️ LEFT MUSCLE → SCROLL UP")
+
+            # 3. RIGHT MUSCLE (CH2) → Scroll DOWN
+            if ch_right > SIDE_THRESH:
+                if now - self._last_nod_t >= 0.180:
+                    self._last_nod_t = now
+                    self.trigger_action("scroll", -3, "⬇️ RIGHT MUSCLE → SCROLL DOWN")
 
     def feed_imu(self, dx: float, dy: float, pitch: float = 0.0, roll: float = 0.0, now: Optional[float] = None) -> None:
         if now is None:
@@ -288,30 +311,34 @@ class UnifiedGestureEngine:
                 self.trigger_action("click", "left", "⚡ GESTURE: JAW CLENCH (LEFT CLICK)")
 
             # 4. Left Eye Close & Release
+            # Lowered close threshold 0.18 → 0.22 (easier to detect wink)
+            # Widened wink duration window 0.08–0.65 → 0.06–0.90
             if left_ear is not None and right_ear is not None:
-                l_closed = (left_ear < 0.18) and (right_ear >= 0.22)
+                l_closed = (left_ear < 0.22) and (right_ear >= 0.20)
                 if l_closed and not self._left_eye_closed:
                     self._left_eye_closed = True
                     self._left_eye_close_t = now
                 elif not l_closed and self._left_eye_closed:
                     self._left_eye_closed = False
                     dur = now - self._left_eye_close_t
-                    if 0.08 <= dur <= 0.65:
+                    if 0.06 <= dur <= 0.90:
                         self.trigger_action("click", "left", "👁️ LEFT EYE WINK")
 
                 # 5. Right Eye Close & Release
-                r_closed = (right_ear < 0.18) and (left_ear >= 0.22)
+                # Same improved thresholds
+                r_closed = (right_ear < 0.22) and (left_ear >= 0.20)
                 if r_closed and not self._right_eye_closed:
                     self._right_eye_closed = True
                     self._right_eye_close_t = now
                 elif not r_closed and self._right_eye_closed:
                     self._right_eye_closed = False
                     dur = now - self._right_eye_close_t
-                    if 0.08 <= dur <= 0.65:
+                    if 0.06 <= dur <= 0.90:
                         self.trigger_action("click", "right", "👁️ RIGHT EYE WINK")
 
             # 6. Smile Gesture -> Enter / Confirm
-            if smile >= 0.45:
+            # Lowered threshold 0.45 → 0.35
+            if smile >= 0.35:
                 if now - self._last_smile_t >= 0.800:
                     self._last_smile_t = now
                     self.trigger_action("key", "enter", "😊 SMILE")

@@ -20,7 +20,7 @@ import socket
 import threading
 import time
 import urllib.request
-from typing import TYPE_CHECKING, Callable, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Tuple
 
 if TYPE_CHECKING:
     from host.omniband.hardware.hardware_calibration import HardwareCalibrator
@@ -58,6 +58,8 @@ def parse_wifi_packet(data_raw: bytes | str) -> Optional[dict]:
                     "channels": ch_list,
                     "dx": float(obj.get("dx", 0.0)),
                     "dy": float(obj.get("dy", 0.0)),
+                    "pitch": float(obj.get("pitch", 0.0)),
+                    "roll": float(obj.get("roll", 0.0)),
                     "click": str(obj.get("click", "none")),
                     "scroll": int(obj.get("scroll", 0)),
                     "gesture": str(obj.get("gesture", "")),
@@ -135,6 +137,228 @@ def parse_wifi_packet(data_raw: bytes | str) -> Optional[dict]:
     return None
 
 
+class UnifiedGestureEngine:
+    """Unified 8-Gesture State Machine for OmniBand V2 (Piezo + IMU + Optical Fusion).
+
+    8 Supported Gestures:
+    1. Jaw Clench: Single spike on CH4/CH1 -> gateway.left_click()
+    2. Jaw Double-Tap: 2 spikes within < 450ms -> gateway.right_click()
+    3. Jaw Hold & Release: Sustained clench > 450ms -> mouse_down('left') on hold start, mouse_up('left') on release
+    4. Left Eye Close & Release: Triggers Left Click action
+    5. Right Eye Close & Release: Triggers Right Click action
+    6. Smile Gesture: Triggers Enter / Confirm action (😊 Smile Trigger)
+    7. Eyebrow Raise (CH2+CH3 / Optical): Smooth Scroll UP (gateway.scroll(dy=+3))
+    8. Head Nod (MPU Pitch Down / Optical): Smooth Scroll DOWN (gateway.scroll(dy=-3))
+    """
+
+    def __init__(
+        self,
+        on_action: Optional[Callable[[str, Any], None]] = None,
+        on_badge: Optional[Callable[[str], None]] = None,
+    ) -> None:
+        self.on_action = on_action  # ("click", "left"), ("mouse_down", "left"), ("scroll", 3), etc.
+        self.on_badge = on_badge    # "⚡ GESTURE: JAW HOLD (DRAGGING...)"
+        self._lock = threading.Lock()
+
+        # Jaw Clench / Tap / Hold state
+        self._jaw_active = False
+        self._jaw_press_t = 0.0
+        self._jaw_hold_fired = False
+        self._last_tap_t = 0.0
+        self._tap_count = 0
+        self._single_tap_pending = False
+        self._single_tap_deadline = 0.0
+
+        # Eye states
+        self._left_eye_closed = False
+        self._left_eye_close_t = 0.0
+        self._right_eye_closed = False
+        self._right_eye_close_t = 0.0
+
+        # Cooldown timers
+        self._last_smile_t = 0.0
+        self._last_brow_t = 0.0
+        self._last_nod_t = 0.0
+        self._prev_mpu_pitch = 0.0
+
+    def trigger_action(self, action_type: str, param: Any, badge_text: str) -> None:
+        if self.on_badge:
+            try:
+                self.on_badge(badge_text)
+            except Exception as e:
+                log.debug("on_badge error: %s", e)
+        if self.on_action:
+            try:
+                self.on_action(action_type, param)
+            except Exception as e:
+                log.debug("on_action error: %s", e)
+
+    def feed_somatic(self, channels: List[float], now: Optional[float] = None) -> None:
+        if now is None:
+            now = time.perf_counter()
+
+        with self._lock:
+            # Check pending single tap timeout
+            if self._single_tap_pending and now >= self._single_tap_deadline:
+                self._single_tap_pending = False
+                self._tap_count = 0
+                self.trigger_action("click", "left", "⚡ GESTURE: JAW CLENCH (LEFT CLICK)")
+
+            if len(channels) < 4:
+                return
+
+            c = [float(x) / 4095.0 if float(x) > 1.0 else float(x) for x in channels]
+            ch1, ch2, ch3, ch4 = c[0], c[1], c[2], c[3]
+
+            # 1. Jaw Clench Trigger logic (Masseter CH4 spike or strong CH1 temporalis)
+            jaw_is_high = (ch4 > 0.40) or (ch1 > 0.65)
+
+            if jaw_is_high and not self._jaw_active:
+                self._jaw_active = True
+                self._jaw_press_t = now
+                self._jaw_hold_fired = False
+
+            elif jaw_is_high and self._jaw_active:
+                dur = now - self._jaw_press_t
+                if dur >= 0.450 and not self._jaw_hold_fired:
+                    self._jaw_hold_fired = True
+                    self._single_tap_pending = False
+                    self._tap_count = 0
+                    self.trigger_action("mouse_down", "left", "⚡ GESTURE: JAW HOLD (DRAGGING...)")
+
+            elif not jaw_is_high and self._jaw_active:
+                self._jaw_active = False
+                dur = now - self._jaw_press_t
+
+                if self._jaw_hold_fired:
+                    self._jaw_hold_fired = False
+                    self.trigger_action("mouse_up", "left", "⚡ GESTURE: JAW RELEASE (DROPPED)")
+                    self._tap_count = 0
+                else:
+                    if self._tap_count == 1 and (now - self._last_tap_t < 0.450):
+                        self._single_tap_pending = False
+                        self._tap_count = 0
+                        self._last_tap_t = 0.0
+                        self.trigger_action("click", "right", "⚡ GESTURE: JAW DOUBLE-TAP -> RIGHT CLICK")
+                    else:
+                        self._tap_count = 1
+                        self._last_tap_t = now
+                        self._single_tap_pending = True
+                        self._single_tap_deadline = now + 0.280
+
+            # 2. Eyebrow Raise via Somatic CH2 + CH3
+            if ch2 > 0.42 and ch3 > 0.42:
+                if now - self._last_brow_t >= 0.120:
+                    self._last_brow_t = now
+                    self.trigger_action("scroll", 3, "⬆️ BROW RAISE")
+
+    def feed_imu(self, dx: float, dy: float, pitch: float = 0.0, roll: float = 0.0, now: Optional[float] = None) -> None:
+        if now is None:
+            now = time.perf_counter()
+
+        with self._lock:
+            if self._single_tap_pending and now >= self._single_tap_deadline:
+                self._single_tap_pending = False
+                self._tap_count = 0
+                self.trigger_action("click", "left", "⚡ GESTURE: JAW CLENCH (LEFT CLICK)")
+
+            # Head Nod detection from MPU Pitch Down
+            if pitch < -14.0 or (self._prev_mpu_pitch - pitch > 18.0):
+                if now - self._last_nod_t >= 0.150:
+                    self._last_nod_t = now
+                    self.trigger_action("scroll", -3, "⬇️ HEAD NOD")
+            self._prev_mpu_pitch = pitch
+
+    def feed_optical(
+        self,
+        left_ear: Optional[float] = None,
+        right_ear: Optional[float] = None,
+        smile: float = 0.0,
+        brow: float = 0.0,
+        pitch: float = 0.0,
+        now: Optional[float] = None,
+    ) -> None:
+        if now is None:
+            now = time.perf_counter()
+
+        with self._lock:
+            if self._single_tap_pending and now >= self._single_tap_deadline:
+                self._single_tap_pending = False
+                self._tap_count = 0
+                self.trigger_action("click", "left", "⚡ GESTURE: JAW CLENCH (LEFT CLICK)")
+
+            # 4. Left Eye Close & Release
+            if left_ear is not None and right_ear is not None:
+                l_closed = (left_ear < 0.18) and (right_ear >= 0.22)
+                if l_closed and not self._left_eye_closed:
+                    self._left_eye_closed = True
+                    self._left_eye_close_t = now
+                elif not l_closed and self._left_eye_closed:
+                    self._left_eye_closed = False
+                    dur = now - self._left_eye_close_t
+                    if 0.08 <= dur <= 0.65:
+                        self.trigger_action("click", "left", "👁️ LEFT EYE WINK")
+
+                # 5. Right Eye Close & Release
+                r_closed = (right_ear < 0.18) and (left_ear >= 0.22)
+                if r_closed and not self._right_eye_closed:
+                    self._right_eye_closed = True
+                    self._right_eye_close_t = now
+                elif not r_closed and self._right_eye_closed:
+                    self._right_eye_closed = False
+                    dur = now - self._right_eye_close_t
+                    if 0.08 <= dur <= 0.65:
+                        self.trigger_action("click", "right", "👁️ RIGHT EYE WINK")
+
+            # 6. Smile Gesture -> Enter / Confirm
+            if smile >= 0.45:
+                if now - self._last_smile_t >= 0.800:
+                    self._last_smile_t = now
+                    self.trigger_action("key", "enter", "😊 SMILE")
+
+            # 7. Optical Eyebrow Raise
+            if brow >= 0.45:
+                if now - self._last_brow_t >= 0.120:
+                    self._last_brow_t = now
+                    self.trigger_action("scroll", 3, "⬆️ BROW RAISE")
+
+            # 8. Optical Head Nod (Pitch down)
+            if pitch < -12.0:
+                if now - self._last_nod_t >= 0.150:
+                    self._last_nod_t = now
+                    self.trigger_action("scroll", -3, "⬇️ HEAD NOD")
+
+    def feed_gesture(self, gesture_name: str, now: Optional[float] = None) -> None:
+        if now is None:
+            now = time.perf_counter()
+
+        g = (gesture_name or "").strip().upper()
+        with self._lock:
+            if g in ("CLICK", "LEFT", "JAW_CLENCH"):
+                self.trigger_action("click", "left", "⚡ GESTURE: JAW CLENCH (LEFT CLICK)")
+            elif g in ("RIGHT", "DOUBLE", "DOUBLE_CLENCH", "JAW_TAP", "TAP"):
+                self.trigger_action("click", "right", "⚡ GESTURE: JAW DOUBLE-TAP -> RIGHT CLICK")
+            elif g in ("HOLD", "JAW_HOLD", "DRAG", "DRAG_ON"):
+                self.trigger_action("mouse_down", "left", "⚡ GESTURE: JAW HOLD (DRAGGING...)")
+            elif g in ("RELEASE", "DRAG_OFF"):
+                self.trigger_action("mouse_up", "left", "⚡ GESTURE: JAW RELEASE (DROPPED)")
+            elif g in ("SCROLL_UP", "BROW_RAISE"):
+                self.trigger_action("scroll", 3, "⬆️ BROW RAISE")
+            elif g in ("SCROLL_DOWN", "NOD"):
+                self.trigger_action("scroll", -3, "⬇️ HEAD NOD")
+            elif g in ("SMILE", "ENTER"):
+                self.trigger_action("key", "enter", "😊 SMILE")
+
+    def poll(self, now: Optional[float] = None) -> None:
+        if now is None:
+            now = time.perf_counter()
+        with self._lock:
+            if self._single_tap_pending and now >= self._single_tap_deadline:
+                self._single_tap_pending = False
+                self._tap_count = 0
+                self.trigger_action("click", "left", "⚡ GESTURE: JAW CLENCH (LEFT CLICK)")
+
+
 class OmniBandWifiClient:
     """Zero-configuration Ultra-Low-Latency Wi-Fi UDP Hardware Receiver for OmniBand."""
 
@@ -149,6 +373,8 @@ class OmniBandWifiClient:
         on_connection_change: Optional[Callable[[bool, str], None]] = None,
         on_metrics_update: Optional[Callable[[float], None]] = None,
         on_status_change: Optional[Callable[[str], None]] = None,
+        on_gesture_action: Optional[Callable[[str, Any], None]] = None,
+        on_gesture_badge: Optional[Callable[[str], None]] = None,
     ) -> None:
         self.port = port
         self.esp_ip = esp_ip
@@ -159,6 +385,11 @@ class OmniBandWifiClient:
         self.on_connection_change = on_connection_change
         self.on_metrics_update = on_metrics_update
         self.on_status_change = on_status_change
+
+        self.gesture_engine = UnifiedGestureEngine(
+            on_action=on_gesture_action,
+            on_badge=on_gesture_badge,
+        )
 
         self._running = False
         self._connected = False
@@ -294,7 +525,7 @@ class OmniBandWifiClient:
                         self.on_metrics_update(self._pkt_rate)
 
             except socket.timeout:
-                pass
+                self.gesture_engine.poll(time.perf_counter())
             except Exception as e:
                 if self._running:
                     log.debug("UDP receive loop exception: %s", e)
@@ -307,6 +538,14 @@ class OmniBandWifiClient:
         if kind == "somatic":
             raw_ch = pkt.get("channels", [0.0, 0.0, 0.0, 0.0])
             seq = pkt.get("seq", 0)
+            dx = float(pkt.get("dx", 0.0))
+            dy = float(pkt.get("dy", 0.0))
+            pitch = float(pkt.get("pitch", 0.0))
+            roll = float(pkt.get("roll", 0.0))
+
+            # Route to Unified 8-Gesture State Machine
+            self.gesture_engine.feed_somatic(raw_ch)
+            self.gesture_engine.feed_imu(dx, dy, pitch, roll)
 
             # Normalization via HardwareCalibrator if registered
             if self.calibrator:
@@ -320,33 +559,39 @@ class OmniBandWifiClient:
                 self.on_somatic_frame(filtered_ch, active, seq)
 
             # Route IMU motion deltas if present
-            dx = float(pkt.get("dx", 0.0))
-            dy = float(pkt.get("dy", 0.0))
             if (abs(dx) > 0.001 or abs(dy) > 0.001) and self.on_imu_motion:
                 self.on_imu_motion(dx, dy)
 
             # Route inline gesture/click/scroll if present
             click = pkt.get("click", "none")
             if click and click not in ("none", ""):
+                self.gesture_engine.feed_gesture(click)
                 if self.on_hardware_gesture:
                     self.on_hardware_gesture(click.upper())
 
             scroll = pkt.get("scroll", 0)
-            if scroll != 0 and self.on_hardware_gesture:
-                self.on_hardware_gesture(f"SCROLL_{'UP' if scroll > 0 else 'DOWN'}")
+            if scroll != 0:
+                self.gesture_engine.feed_gesture("SCROLL_UP" if scroll > 0 else "SCROLL_DOWN")
+                if self.on_hardware_gesture:
+                    self.on_hardware_gesture(f"SCROLL_{'UP' if scroll > 0 else 'DOWN'}")
 
             gesture = pkt.get("gesture", "")
-            if gesture and self.on_hardware_gesture:
-                self.on_hardware_gesture(gesture.upper())
+            if gesture and gesture not in ("NONE", ""):
+                self.gesture_engine.feed_gesture(gesture)
+                if self.on_hardware_gesture:
+                    self.on_hardware_gesture(gesture.upper())
 
         elif kind == "gesture":
             g = pkt.get("gesture", "")
-            if g and self.on_hardware_gesture:
-                self.on_hardware_gesture(g.upper())
+            if g:
+                self.gesture_engine.feed_gesture(g)
+                if self.on_hardware_gesture:
+                    self.on_hardware_gesture(g.upper())
 
         elif kind == "scroll":
             delta_y = pkt.get("delta_y", 0)
             g = "SCROLL_UP" if delta_y > 0 else "SCROLL_DOWN"
+            self.gesture_engine.feed_gesture(g)
             if self.on_hardware_gesture:
                 self.on_hardware_gesture(g)
 

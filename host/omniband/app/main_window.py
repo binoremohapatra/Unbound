@@ -130,6 +130,16 @@ class MainWindow(QMainWindow):
         self._drag_latch = False
         self._click_timestamps: list[float] = []
 
+        # MPU Orientation & Inversion Controls
+        self.invert_mpu_x: bool = True
+        self.invert_mpu_y: bool = True
+        self.swap_mpu_xy: bool = False
+        self._load_mpu_config()
+
+        self._badge_revert_timer = QTimer(self)
+        self._badge_revert_timer.setSingleShot(True)
+        self._badge_revert_timer.timeout.connect(self._revert_gesture_badge)
+
         # Core Components Initialization
         self.scope = OscilloscopeWidget()
         self.calibrator = HardwareCalibrator()
@@ -255,6 +265,8 @@ class MainWindow(QMainWindow):
             on_imu_motion=lambda dx, dy: self.sig_imu_motion.emit(dx, dy),
             on_hardware_gesture=lambda g: self.sig_hw_gesture.emit(g),
             on_status_change=lambda msg: self.sig_hw_status.emit(msg),
+            on_gesture_action=self._on_gesture_engine_action,
+            on_gesture_badge=self._on_gesture_badge_update,
         )
         self.wifi_client.start()
 
@@ -477,9 +489,14 @@ class MainWindow(QMainWindow):
         self._lbl_voice_status.setFont(QFont("Cascadia Code", 8))
         self._lbl_voice_status.setStyleSheet(f"color: #00E5FF; background: {SURFACE_1}; padding: 3px 6px; border-radius: 3px; border: 1px solid {BORDER};")
 
+        self._lbl_active_gesture_badge = QLabel("⚡ GESTURE: READY")
+        self._lbl_active_gesture_badge.setFont(QFont("Cascadia Code", 8, QFont.Bold))
+        self._lbl_active_gesture_badge.setStyleSheet(f"color: #00E5FF; background: {SURFACE_2}; padding: 3px 8px; border-radius: 3px; border: 1px solid #00E5FF; font-weight: bold;")
+
         p_layout.addWidget(self._lbl_proof_target)
         p_layout.addWidget(self._lbl_proof_keys)
         p_layout.addWidget(self._lbl_proof_last)
+        p_layout.addWidget(self._lbl_active_gesture_badge)
         p_layout.addWidget(lbl_gateway)
         p_layout.addWidget(self._lbl_voice_status)
         p_layout.addStretch()
@@ -682,6 +699,31 @@ class MainWindow(QMainWindow):
         hw_status_row.addStretch()
         layout.addLayout(hw_status_row)
 
+        # MPU Orientation & Inversion Controls
+        mpu_ctrl_row = QHBoxLayout()
+        mpu_ctrl_row.setSpacing(10)
+
+        self._chk_invert_mpu_x = QCheckBox("Invert MPU X (Left/Right)")
+        self._chk_invert_mpu_x.setFont(QFont("Segoe UI", 8))
+        self._chk_invert_mpu_x.setChecked(self.invert_mpu_x)
+        self._chk_invert_mpu_x.toggled.connect(self._on_mpu_inversion_toggled)
+
+        self._chk_invert_mpu_y = QCheckBox("Invert MPU Y (Up/Down)")
+        self._chk_invert_mpu_y.setFont(QFont("Segoe UI", 8))
+        self._chk_invert_mpu_y.setChecked(self.invert_mpu_y)
+        self._chk_invert_mpu_y.toggled.connect(self._on_mpu_inversion_toggled)
+
+        self._chk_swap_mpu_xy = QCheckBox("Swap MPU X <-> Y (90° Mount)")
+        self._chk_swap_mpu_xy.setFont(QFont("Segoe UI", 8))
+        self._chk_swap_mpu_xy.setChecked(self.swap_mpu_xy)
+        self._chk_swap_mpu_xy.toggled.connect(self._on_mpu_inversion_toggled)
+
+        mpu_ctrl_row.addWidget(self._chk_invert_mpu_x)
+        mpu_ctrl_row.addWidget(self._chk_invert_mpu_y)
+        mpu_ctrl_row.addWidget(self._chk_swap_mpu_xy)
+        mpu_ctrl_row.addStretch()
+        layout.addLayout(mpu_ctrl_row)
+
         # Calibration Matrix Displays (from self.calib)
         matrix_box = QVBoxLayout()
         matrix_box.setSpacing(4)
@@ -783,6 +825,16 @@ class MainWindow(QMainWindow):
                 self.webcam_tracker.latest_result.nose_tip if self.webcam_tracker.latest_result else None,
                 self.webcam_tracker.current_eye_dist,
             )
+
+            # Feed optical biometric data to Unified 8-Gesture Engine
+            if hasattr(self, "wifi_client") and hasattr(self.wifi_client, "gesture_engine"):
+                self.wifi_client.gesture_engine.feed_optical(
+                    left_ear=self.webcam_tracker.current_left_ear,
+                    right_ear=self.webcam_tracker.current_right_ear,
+                    smile=getattr(self.webcam_tracker, "current_smile", 0.0),
+                    brow=getattr(self.webcam_tracker, "current_brow", 0.0),
+                    pitch=self.webcam_tracker.head_pitch,
+                )
 
             # Live Biometric Telemetry update
             ear_str = f"{self.webcam_tracker.current_ear:.2f}" if self.webcam_tracker.current_ear is not None else "--"
@@ -1408,6 +1460,7 @@ class MainWindow(QMainWindow):
         from core.events import OutputCommand
 
         self._lbl_last_gesture.setText(f"Gesture: {g}")
+        self._on_gesture_badge_update(f"⚡ GESTURE: {g}")
 
         if g in ("CLICK", "LEFT", "JAW_CLENCH", "RIGHT_CLENCH", "CH4"):
             self._on_physical_edge(4, True, 200.0)
@@ -1460,7 +1513,111 @@ class MainWindow(QMainWindow):
             self._on_physical_edge(1, True, 200.0)
             QTimer.singleShot(80, lambda: self._on_physical_edge(1, False, 0.0))
 
+    def _load_mpu_config(self) -> None:
+        p = PROJECT_ROOT / "config" / "mpu_config.json"
+        self.invert_mpu_x = True
+        self.invert_mpu_y = True
+        self.swap_mpu_xy = False
+        if p.is_file():
+            try:
+                import json
+                with open(p, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    self.invert_mpu_x = bool(data.get("invert_x", True))
+                    self.invert_mpu_y = bool(data.get("invert_y", True))
+                    self.swap_mpu_xy = bool(data.get("swap_xy", False))
+            except Exception:
+                pass
+
+    def _save_mpu_config(self) -> None:
+        p = PROJECT_ROOT / "config" / "mpu_config.json"
+        try:
+            import json
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "w", encoding="utf-8") as f:
+                json.dump({
+                    "invert_x": self.invert_mpu_x,
+                    "invert_y": self.invert_mpu_y,
+                    "swap_xy": self.swap_mpu_xy,
+                }, f, indent=2)
+        except Exception:
+            pass
+
+    def _on_mpu_inversion_toggled(self) -> None:
+        if hasattr(self, "_chk_invert_mpu_x"):
+            self.invert_mpu_x = self._chk_invert_mpu_x.isChecked()
+        if hasattr(self, "_chk_invert_mpu_y"):
+            self.invert_mpu_y = self._chk_invert_mpu_y.isChecked()
+        if hasattr(self, "_chk_swap_mpu_xy"):
+            self.swap_mpu_xy = self._chk_swap_mpu_xy.isChecked()
+        self._save_mpu_config()
+        self.calib.append_log(f"MPU Inversion updated: InvX={self.invert_mpu_x}, InvY={self.invert_mpu_y}, SwapXY={self.swap_mpu_xy}")
+
+    def _revert_gesture_badge(self) -> None:
+        if hasattr(self, "_lbl_active_gesture_badge"):
+            self._lbl_active_gesture_badge.setText("⚡ GESTURE: READY")
+            self._lbl_active_gesture_badge.setStyleSheet(f"color: #00E5FF; background: {SURFACE_2}; padding: 3px 8px; border-radius: 3px; border: 1px solid #00E5FF;")
+
+    def _on_gesture_badge_update(self, text: str) -> None:
+        if hasattr(self, "_lbl_active_gesture_badge"):
+            self._lbl_active_gesture_badge.setText(text)
+            self._lbl_active_gesture_badge.setStyleSheet(f"color: {STATUS_OK}; background: {SURFACE_2}; padding: 3px 8px; border-radius: 3px; border: 1px solid {STATUS_OK}; font-weight: bold;")
+            if hasattr(self, "_badge_revert_timer"):
+                self._badge_revert_timer.start(2000)
+        if hasattr(self, "_lbl_last_gesture"):
+            self._lbl_last_gesture.setText(text)
+
+    def _on_gesture_engine_action(self, action_type: str, param: Any) -> None:
+        from core.events import OutputCommand
+        now = time.perf_counter()
+
+        if action_type == "click":
+            btn = "left" if param == "left" else "right"
+            self.gw.apply([OutputCommand(kind="button", name=btn, pressed=True)])
+            self.gw.flush(now)
+            QTimer.singleShot(60, lambda: (
+                self.gw.apply([OutputCommand(kind="button", name=btn, pressed=False)]),
+                self.gw.flush(time.perf_counter())
+            ))
+            self.calib.append_log(f"⚡ [GESTURE ENGINE] Click: {btn.upper()}")
+
+        elif action_type == "mouse_down":
+            self.gw.apply([OutputCommand(kind="button", name=str(param), pressed=True)])
+            self.gw.flush(now)
+            self._drag_latch = True
+            self.calib.append_log(f"⚡ [GESTURE ENGINE] Mouse Down: {param} (Drag Lock ON)")
+
+        elif action_type == "mouse_up":
+            self.gw.apply([OutputCommand(kind="button", name=str(param), pressed=False)])
+            self.gw.flush(now)
+            self._drag_latch = False
+            self.calib.append_log(f"⚡ [GESTURE ENGINE] Mouse Up: {param} (Drag Dropped)")
+
+        elif action_type == "scroll":
+            steps = int(param)
+            delta = steps * 40
+            self.gw.apply([OutputCommand(kind="wheel", delta_y=delta)])
+            self.gw.flush(now)
+            self.calib.append_log(f"⚡ [GESTURE ENGINE] Scroll: dy={steps} ({'UP' if steps > 0 else 'DOWN'})")
+
+        elif action_type == "key":
+            key_name = str(param)
+            self.gw.apply([OutputCommand(kind="key", name=key_name, pressed=True)])
+            self.gw.flush(now)
+            QTimer.singleShot(60, lambda: (
+                self.gw.apply([OutputCommand(kind="key", name=key_name, pressed=False)]),
+                self.gw.flush(time.perf_counter())
+            ))
+            self.calib.append_log(f"⚡ [GESTURE ENGINE] Key: {key_name.upper()} (Enter/Confirm)")
+
     def _on_imu_motion_event(self, dx: float, dy: float) -> None:
+        if getattr(self, "swap_mpu_xy", False):
+            dx, dy = dy, dx
+        if getattr(self, "invert_mpu_x", True):
+            dx = -dx
+        if getattr(self, "invert_mpu_y", True):
+            dy = -dy
+
         if abs(dx) > 0.01 or abs(dy) > 0.01:
             self._last_mpu_motion_time = time.perf_counter()
             self._mpu_detected = True

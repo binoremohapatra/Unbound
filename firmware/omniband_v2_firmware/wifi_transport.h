@@ -19,6 +19,8 @@ public:
     // Telemetry & somatic frames
     void send_telemetry(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4,
                         uint32_t seq, float dx = 0.0f, float dy = 0.0f,
+                        float pitch = 0.0f, float roll = 0.0f,
+                        const char* gesture = "NONE",
                         const char* click_type = "none", int scroll_val = 0);
 
     // Mouse actions & gestures

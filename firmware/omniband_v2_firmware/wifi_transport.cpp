@@ -77,14 +77,17 @@ void OmniBandWifiServer::poll() {
 
 void OmniBandWifiServer::send_telemetry(int32_t ch1, int32_t ch2, int32_t ch3, int32_t ch4,
                                         uint32_t seq, float dx, float dy,
+                                        float pitch, float roll,
+                                        const char* gesture,
                                         const char* click_type, int scroll_val) {
-    char buf[160];
+    char buf[200];
+    const char* gst = (gesture && strlen(gesture) > 0) ? gesture : "NONE";
     const char* clk = (click_type && strlen(click_type) > 0) ? click_type : pending_click_.c_str();
     int scr = (scroll_val != 0) ? scroll_val : pending_scroll_;
 
     snprintf(buf, sizeof(buf),
-             "{\"ch\":[%ld,%ld,%ld,%ld],\"dx\":%.2f,\"dy\":%.2f,\"click\":\"%s\",\"scroll\":%d,\"seq\":%lu}\n",
-             (long)ch1, (long)ch2, (long)ch3, (long)ch4, dx, dy, clk, scr, (unsigned long)seq);
+             "{\"ch\":[%ld,%ld,%ld,%ld],\"dx\":%.2f,\"dy\":%.2f,\"pitch\":%.2f,\"roll\":%.2f,\"gesture\":\"%s\",\"click\":\"%s\",\"scroll\":%d,\"seq\":%lu}\n",
+             (long)ch1, (long)ch2, (long)ch3, (long)ch4, dx, dy, pitch, roll, gst, clk, scr, (unsigned long)seq);
 
     size_t len = strlen(buf);
 

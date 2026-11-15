@@ -77,6 +77,8 @@ class TrackerResult:
     right_ear: Optional[float] = None
     eye_dist: Optional[float] = None
     frame_rgb: Optional[np.ndarray] = None
+    smile: float = 0.0
+    brow: float = 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -446,6 +448,8 @@ class RealWebcamTracker:
         self.current_left_ear: Optional[float] = None
         self.current_right_ear: Optional[float] = None
         self.current_eye_dist: Optional[float] = None
+        self.current_smile: float = 0.0
+        self.current_brow: float = 0.0
         self.head_yaw: float = 0.0
         self.head_pitch: float = 0.0
         self.current_tier: str = "NO_FACE"
@@ -879,6 +883,8 @@ class RealWebcamTracker:
         p_re = landmarks_3d[263]
         eye_dist = math.hypot(p_le[0] - p_re[0], p_le[1] - p_re[1])
 
+        smile = 0.0
+        brow = 0.0
         if blendshapes and len(blendshapes) > 0:
             bs = {b.category_name: b.score for b in blendshapes[0]}
             blink_score = (bs.get("eyeBlinkLeft", 0.0) + bs.get("eyeBlinkRight", 0.0)) / 2.0
@@ -889,9 +895,17 @@ class RealWebcamTracker:
             right_ear = max(0.05, 0.35 * (1.0 - blink_r))
             ear = (left_ear + right_ear) / 2.0
             mar = bs.get("jawOpen", 0.0)
+            smile = max(bs.get("mouthSmileLeft", 0.0), bs.get("mouthSmileRight", 0.0))
+            brow = max(bs.get("browInnerUp", 0.0), bs.get("browOuterUpLeft", 0.0), bs.get("browOuterUpRight", 0.0))
         else:
             inner_lip_pts = [landmarks_px[i] for i in INNER_LIP_INDICES]
             mar = calculate_mar(inner_lip_pts)
+            if len(landmarks_3d) >= 292:
+                smile = max(0.0, float((landmarks_3d[13][1] - (landmarks_3d[61][1] + landmarks_3d[291][1]) * 0.5) * 8.0))
+                brow = max(0.0, float((landmarks_3d[159][1] - landmarks_3d[105][1]) * 6.0))
+
+        self.current_smile = smile
+        self.current_brow = brow
 
         return TrackerResult(
             tier=tier,
@@ -906,6 +920,8 @@ class RealWebcamTracker:
             left_ear=left_ear,
             right_ear=right_ear,
             eye_dist=eye_dist,
+            smile=smile,
+            brow=brow,
         )
 
     # ------------------------------------------------------------------

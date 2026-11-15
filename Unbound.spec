@@ -35,6 +35,7 @@ hiddenimports = [
     'host.omniband.tracking.webcam_tracker',
     'host.omniband.tracking.physical_keys',
     'host.omniband.ble_transport',
+    'host.omniband.wifi_transport',
     'host.omniband.hardware.ble_client',
     'host.omniband.hardware.hardware_calibration',
     'serial',

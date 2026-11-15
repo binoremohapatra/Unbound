@@ -861,7 +861,7 @@ class MainWindow(QMainWindow):
 
     def _on_cursor_tick(self) -> None:
         """Consistent 60 FPS delta-velocity cursor integration loop."""
-        if not self.webcam_tracker.head_mouse_enabled:
+        if not self.webcam_tracker.head_mouse_enabled or self._is_racing_game():
             return
 
         now = time.perf_counter()
@@ -1251,6 +1251,35 @@ class MainWindow(QMainWindow):
             except Exception as e:
                 self.calib.append_log(f"Char injection error: {e}")
 
+    def _is_racing_game(self, proc: Any = None) -> bool:
+        """Return True if active foreground process is a racing game (NFS, Forza, GTA, Cyberpunk)."""
+        if proc is None:
+            proc = get_active_process_win32()
+        exe_lower = (getattr(proc, "exe_name", "") or "").lower()
+        title_lower = (getattr(proc, "window_title", "") or "").lower()
+        racing_exes = [
+            "cyberpunk2077.exe",
+            "forzahorizon5.exe",
+            "forzamotorsport.exe",
+            "gta5.exe",
+            "speed.exe",                  # NFS Most Wanted (2005) & Carbon
+            "speed2.exe",                 # NFS Underground 2
+            "nfs13.exe",                  # NFS Most Wanted (2012)
+            "nfs.exe",                    # Need for Speed (General)
+            "needforspeedmostwanted.exe",
+            "needforspeed.exe",
+            "supertuxkart.exe",
+        ]
+        if any(r in exe_lower for r in racing_exes):
+            return True
+        if any(kw in title_lower for kw in ["most wanted", "need for speed", "forza horizon", "forza motorsport", "supertuxkart"]):
+            return True
+        if hasattr(self, "_combo_mode"):
+            mode_txt = self._combo_mode.currentText().lower()
+            if "racing" in mode_txt or "arena" in mode_txt:
+                return True
+        return False
+
     def _on_optical_gesture(self, ch: int, down: bool, amp: float) -> None:
         if not self.armed:
             return
@@ -1259,12 +1288,11 @@ class MainWindow(QMainWindow):
         ges_names = {1: "Face Left (CH1)", 2: "Face Right (CH2)", 3: "Face Up / Nod (CH3)", 4: "Jaw Drop (CH4)"}
         self._lbl_last_gesture.setText(f"Gesture: {ges_names.get(ch, f'CH{ch}')} ({'DOWN' if down else 'UP'})")
 
-        if self.webcam_tracker.head_mouse_enabled and ch in (1, 2, 3):
+        if self.webcam_tracker.head_mouse_enabled and ch in (1, 2, 3) and not self._is_racing_game():
             return
 
         proc = get_active_process_win32()
-        exe_lower = proc.exe_name.lower()
-        is_racing_game = any(g in exe_lower for g in ["cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"])
+        is_racing_game = self._is_racing_game(proc)
 
         if ch in (1, 2) and not is_racing_game:
             return
@@ -1274,25 +1302,33 @@ class MainWindow(QMainWindow):
 
         if ch == 1:
             cmds.append(OutputCommand(kind="key", name="a", pressed=down))
-            self._lbl_proof_last.setText(f"LAST: Face L -> Key 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
+            self._lbl_proof_last.setText(f"LAST: Face L -> Steer Left 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 2:
             cmds.append(OutputCommand(kind="key", name="d", pressed=down))
-            self._lbl_proof_last.setText(f"LAST: Face R -> Key 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
+            self._lbl_proof_last.setText(f"LAST: Face R -> Steer Right 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
+        elif ch == 3:
+            if is_racing_game:
+                cmds.append(OutputCommand(kind="key", name="w", pressed=down))
+                self._lbl_proof_last.setText(f"LAST: Brow Raise -> Throttle 'w' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 4:
-            self.webcam_tracker.trigger_blink_freeze(0.35)
-            self.reticle.trigger_click_flash()
-            if down and hasattr(self, "prune_engine"):
-                title_context = getattr(proc, "title", "") or getattr(proc, "window_title", "") or "Active Window"
-                self.prune_engine.run_async(
-                    self.prune_engine.capture_lecture_or_gaming_callout,
-                    title_context,
-                    callback=self._on_prune_async_callout,
-                )
-            if self._drag_latch and down:
-                self._toggle_drag_lock()
-                return
-            cmds.append(OutputCommand(kind="button", name="left", pressed=down))
-            self._lbl_proof_last.setText(f"LAST: Jaw Drop -> Left Click ({'DOWN' if down else 'UP'}) @ {now_str}")
+            if is_racing_game:
+                cmds.append(OutputCommand(kind="key", name="s", pressed=down))
+                self._lbl_proof_last.setText(f"LAST: Jaw Clench -> Brake 's' ({'DOWN' if down else 'UP'}) @ {now_str}")
+            else:
+                self.webcam_tracker.trigger_blink_freeze(0.35)
+                self.reticle.trigger_click_flash()
+                if down and hasattr(self, "prune_engine"):
+                    title_context = getattr(proc, "title", "") or getattr(proc, "window_title", "") or "Active Window"
+                    self.prune_engine.run_async(
+                        self.prune_engine.capture_lecture_or_gaming_callout,
+                        title_context,
+                        callback=self._on_prune_async_callout,
+                    )
+                if self._drag_latch and down:
+                    self._toggle_drag_lock()
+                    return
+                cmds.append(OutputCommand(kind="button", name="left", pressed=down))
+                self._lbl_proof_last.setText(f"LAST: Jaw Drop -> Left Click ({'DOWN' if down else 'UP'}) @ {now_str}")
 
         if cmds:
             self.gw.apply(cmds)
@@ -1304,32 +1340,39 @@ class MainWindow(QMainWindow):
         now_str = time.strftime("%H:%M:%S")
 
         proc = get_active_process_win32()
-        exe_lower = proc.exe_name.lower()
-        is_racing_game = any(g in exe_lower for g in ["cyberpunk2077.exe", "forzahorizon5.exe", "gta5.exe"])
+        is_racing_game = self._is_racing_game(proc)
 
         from core.events import OutputCommand
         cmds = []
 
         if ch == 1:
+            # CH1: Left Temple (Temporalis) -> Steer Left 'a'
             if is_racing_game or getattr(self.gw.process_gate, "allow_all", False):
                 cmds.append(OutputCommand(kind="key", name="a", pressed=down))
-                self._lbl_proof_last.setText(f"LAST: CH1 -> 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
+                self._lbl_proof_last.setText(f"LAST: CH1 Left Temple -> Steer Left 'a' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 2:
+            # CH2: Right Temple (Temporalis) -> Steer Right 'd'
             if is_racing_game or getattr(self.gw.process_gate, "allow_all", False):
                 cmds.append(OutputCommand(kind="key", name="d", pressed=down))
-                self._lbl_proof_last.setText(f"LAST: CH2 -> 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
+                self._lbl_proof_last.setText(f"LAST: CH2 Right Temple -> Steer Right 'd' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 3:
+            # CH3: Forehead (Frontalis) -> Eyebrow Raise -> Throttle 'w'
             if is_racing_game or getattr(self.gw.process_gate, "allow_all", False):
                 cmds.append(OutputCommand(kind="key", name="w", pressed=down))
-                self._lbl_proof_last.setText(f"LAST: CH3 -> 'w' ({'DOWN' if down else 'UP'}) @ {now_str}")
+                self._lbl_proof_last.setText(f"LAST: CH3 Brow/Forehead -> Throttle 'w' ({'DOWN' if down else 'UP'}) @ {now_str}")
         elif ch == 4:
-            self.reticle.trigger_click_flash()
-            self.webcam_tracker.trigger_blink_freeze(0.35)
-            if self._drag_latch and down:
-                self._toggle_drag_lock()
-                return
-            cmds.append(OutputCommand(kind="button", name="left", pressed=down))
-            self._lbl_proof_last.setText(f"LAST: CH4 Jaw -> Left Click ({'DOWN' if down else 'UP'}) @ {now_str}")
+            # CH4 / Jaw Clench -> Brake 's' during racing, Left Click otherwise
+            if is_racing_game:
+                cmds.append(OutputCommand(kind="key", name="s", pressed=down))
+                self._lbl_proof_last.setText(f"LAST: Jaw Clench -> Brake 's' ({'DOWN' if down else 'UP'}) @ {now_str}")
+            else:
+                self.reticle.trigger_click_flash()
+                self.webcam_tracker.trigger_blink_freeze(0.35)
+                if self._drag_latch and down:
+                    self._toggle_drag_lock()
+                    return
+                cmds.append(OutputCommand(kind="button", name="left", pressed=down))
+                self._lbl_proof_last.setText(f"LAST: CH4 Jaw -> Left Click ({'DOWN' if down else 'UP'}) @ {now_str}")
 
         if cmds:
             self.gw.apply(cmds)
@@ -1570,6 +1613,74 @@ class MainWindow(QMainWindow):
     def _on_gesture_engine_action(self, action_type: str, param: Any) -> None:
         from core.events import OutputCommand
         now = time.perf_counter()
+        now_str = time.strftime("%H:%M:%S")
+        is_racing = self._is_racing_game()
+
+        if is_racing:
+            # 🏎️ NFS / RACING GAME MAPPINGS (Expressions & Clenches instead of MPU)
+            if action_type == "click":
+                if param == "right":
+                    # Double-tap Jaw Clench -> Handbrake (Space)
+                    self.gw.apply([OutputCommand(kind="key", name="space", pressed=True)])
+                    self.gw.flush(now)
+                    QTimer.singleShot(160, lambda: (
+                        self.gw.apply([OutputCommand(kind="key", name="space", pressed=False)]),
+                        self.gw.flush(time.perf_counter())
+                    ))
+                    self._lbl_proof_last.setText(f"LAST: Double Clench -> Handbrake 'space' @ {now_str}")
+                    self.calib.append_log("🏎️ [NFS/RACING] Double Clench -> Handbrake (SPACE)")
+                    return
+                elif param == "left":
+                    # Single tap Jaw Clench -> Tap Brake 's'
+                    self.gw.apply([OutputCommand(kind="key", name="s", pressed=True)])
+                    self.gw.flush(now)
+                    QTimer.singleShot(120, lambda: (
+                        self.gw.apply([OutputCommand(kind="key", name="s", pressed=False)]),
+                        self.gw.flush(time.perf_counter())
+                    ))
+                    self._lbl_proof_last.setText(f"LAST: Tap Jaw -> Tap Brake 's' @ {now_str}")
+                    self.calib.append_log("🏎️ [NFS/RACING] Tap Clench -> Tap Brake (S)")
+                    return
+
+            elif action_type == "mouse_down":
+                # Sustained Jaw Clench Hold -> Continuous Brake (S)
+                self.gw.apply([OutputCommand(kind="key", name="s", pressed=True)])
+                self.gw.flush(now)
+                self._lbl_proof_last.setText(f"LAST: Jaw Clench -> Brake 's' (HELD) @ {now_str}")
+                self.calib.append_log("🏎️ [NFS/RACING] Jaw Clench Hold -> Brake 's' (HELD)")
+                return
+
+            elif action_type == "mouse_up":
+                # Jaw Clench Release -> Release Brake (S)
+                self.gw.apply([OutputCommand(kind="key", name="s", pressed=False)])
+                self.gw.flush(now)
+                self._lbl_proof_last.setText(f"LAST: Jaw Clench -> Brake 's' (RELEASED) @ {now_str}")
+                self.calib.append_log("🏎️ [NFS/RACING] Jaw Released -> Brake 's' (RELEASED)")
+                return
+
+            elif action_type == "scroll":
+                steps = int(param)
+                if steps > 0:
+                    # Brow raise -> Throttle (W)
+                    self.gw.apply([OutputCommand(kind="key", name="w", pressed=True)])
+                    self.gw.flush(now)
+                    QTimer.singleShot(220, lambda: (
+                        self.gw.apply([OutputCommand(kind="key", name="w", pressed=False)]),
+                        self.gw.flush(time.perf_counter())
+                    ))
+                    self._lbl_proof_last.setText(f"LAST: Brow Raise -> Throttle 'w' @ {now_str}")
+                    self.calib.append_log("🏎️ [NFS/RACING] Brow Raise -> Throttle 'w'")
+                    return
+                else:
+                    # Nod down -> Brake (S)
+                    self.gw.apply([OutputCommand(kind="key", name="s", pressed=True)])
+                    self.gw.flush(now)
+                    QTimer.singleShot(200, lambda: (
+                        self.gw.apply([OutputCommand(kind="key", name="s", pressed=False)]),
+                        self.gw.flush(time.perf_counter())
+                    ))
+                    self._lbl_proof_last.setText(f"LAST: Head Nod -> Brake 's' @ {now_str}")
+                    return
 
         if action_type == "click":
             btn = "left" if param == "left" else "right"
@@ -1621,6 +1732,9 @@ class MainWindow(QMainWindow):
         if abs(dx) > 0.01 or abs(dy) > 0.01:
             self._last_mpu_motion_time = time.perf_counter()
             self._mpu_detected = True
+            if self._is_racing_game():
+                # Anti-spinout protection: MPU cursor injection is completely muted during racing games!
+                return
             self.gw.move_cursor_relative(dx, dy)
             self._update_tier_badge()
 

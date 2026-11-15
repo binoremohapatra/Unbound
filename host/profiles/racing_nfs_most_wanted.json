@@ -1,0 +1,22 @@
+{
+  "profile_name": "racing_nfs_most_wanted",
+  "target_window": "speed.exe",
+  "executables": ["speed.exe", "speed2.exe", "nfs13.exe", "nfs.exe", "NeedForSpeedMostWanted.exe"],
+  "title_keywords": ["Most Wanted", "Need for Speed", "NFS"],
+  "assist_level_default": "FULL",
+  "mute_mpu": true,
+  "key_bindings": {
+    "throttle": "w",
+    "brake": "s",
+    "steer_left": "a",
+    "steer_right": "d",
+    "handbrake": "space"
+  },
+  "clench_bindings": {
+    "CH1_left_temple": "a",
+    "CH2_right_temple": "d",
+    "CH3_forehead_brow": "w",
+    "jaw_clench_hold": "s",
+    "jaw_double_tap": "space"
+  }
+}

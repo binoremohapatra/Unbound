@@ -51,6 +51,24 @@ def sample_rules():
     ]
 
 
+def test_nfs_most_wanted_process_and_title_matching():
+    from host.omniband.app.auto_profile import load_rules
+    rules = load_rules()
+    # 1. Match by speed.exe
+    proc_speed = ProcessInfo(exe_name="speed.exe", window_title="NFS Most Wanted", pid=1001)
+    matched = match_process_rule(proc_speed, rules)
+    assert matched is not None
+    assert "NFS" in matched.name
+    assert matched.mode == 2
+    assert "racing_nfs" in matched.profile
+
+    # 2. Match by window title
+    proc_title = ProcessInfo(exe_name="game.exe", window_title="Need for Speed: Most Wanted", pid=1002)
+    matched2 = match_process_rule(proc_title, rules)
+    assert matched2 is not None
+    assert "NFS" in matched2.name
+
+
 def test_cyberpunk_process_matching(sample_rules):
     proc = ProcessInfo(exe_name="Cyberpunk2077.exe", window_title="Cyberpunk 2077 (v2.1)", pid=1234)
     matched = match_process_rule(proc, sample_rules)

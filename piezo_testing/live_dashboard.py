@@ -48,6 +48,7 @@ from .config import (
     TEXT_MUTED,
     TEXT_PRIMARY,
     WINDOW_DURATIONS,
+    WIFI_UDP_PORT,
     ChannelInfo,
 )
 from .data_logger import DataLogger

@@ -621,6 +621,7 @@ def test_mpu_inversion_and_gesture_badge(qapp):
     assert "DESKTOP MOUSE" in win._btn_nfs_mode.text()
 
     win.gw.apply = orig_apply
+    win.stop()
     win.close()
 
 
